@@ -2,3 +2,8 @@
 .vscode
 target
 logs
+.classpath
+.factorypath
+.project
+.settings/
+
