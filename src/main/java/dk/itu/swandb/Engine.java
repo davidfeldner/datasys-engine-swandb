@@ -11,6 +11,10 @@ import org.slf4j.MDC;
  * Entry point for {@code mvn exec:java}. Loads the golden trips CSV
  * into a fresh engine rooted under a local data directory and prints the
  * three predicate results required by Exercise 2.
+ *
+ * The load step is skipped on subsequent runs when the {@code trips}
+ * table already exists in the on-disk catalog, so the demo is
+ * idempotent. Delete {@code engine-data/} to force a reload.
  */
 public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
@@ -23,12 +27,17 @@ public final class Engine {
         Path dataDir = Path.of("engine-data");
         StorageEngine engine = new StorageEngine(dataDir);
 
-        engine.createTable("trips", List.of(
-                new ColumnSpec("city", ColumnType.STRING),
-                new ColumnSpec("distance", ColumnType.LONG),
-                new ColumnSpec("price", ColumnType.DOUBLE)));
+        boolean alreadyLoaded = new Catalog(dataDir).hasTable("trips");
+        if (alreadyLoaded) {
+            LOGGER.debug("table=trips already loaded; skipping createTable and copyFile");
+        } else {
+            engine.createTable("trips", List.of(
+                    new ColumnSpec("city", ColumnType.STRING),
+                    new ColumnSpec("distance", ColumnType.LONG),
+                    new ColumnSpec("price", ColumnType.DOUBLE)));
 
-        engine.copyFile("trips", "src/test/resources/trips.csv");
+            engine.copyFile("trips", "src/test/resources/trips.csv");
+        }
 
         System.out.println("Predicate: distance GREATER_THAN 100");
         List<Object[]> byDistance = engine.select("trips", "distance",
