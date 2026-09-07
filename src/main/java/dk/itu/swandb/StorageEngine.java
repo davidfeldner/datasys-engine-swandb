@@ -39,9 +39,7 @@ public final class StorageEngine {
      * partition size than the production default.
      */
     public StorageEngine(Path dataDirectory, int maxRowsPerPartition) {
-        if (maxRowsPerPartition <= 0) {
-            throw new IllegalArgumentException("maxRowsPerPartition must be > 0");
-        }
+        if (maxRowsPerPartition <= 0) throw new IllegalArgumentException("maxRowsPerPartition must be > 0");
         this.dataDir = dataDirectory;
         this.maxRowsPerPartition = maxRowsPerPartition;
         try {
@@ -59,20 +57,12 @@ public final class StorageEngine {
     /** Persist a new table schema. */
     public void createTable(String tableName, List<ColumnSpec> columns) {
         long start = System.nanoTime();
-        if (tableName == null || tableName.isEmpty()) {
-            throw new IllegalArgumentException("table name must not be empty");
-        }
-        if (columns == null || columns.isEmpty()) {
-            throw new IllegalArgumentException("column list must not be empty");
-        }
-        if (catalog.hasTable(tableName)) {
-            throw new IllegalArgumentException("table already exists: " + tableName);
-        }
+        if (tableName == null || tableName.isEmpty()) throw new IllegalArgumentException("table name must not be empty");
+        if (columns == null || columns.isEmpty()) throw new IllegalArgumentException("column list must not be empty");
+        if (catalog.hasTable(tableName)) throw new IllegalArgumentException("table already exists: " + tableName);
         Set<String> seen = new HashSet<>();
         for (ColumnSpec c : columns) {
-            if (!seen.add(c.name())) {
-                throw new IllegalArgumentException("duplicate column name: " + c.name());
-            }
+            if (!seen.add(c.name())) throw new IllegalArgumentException("duplicate column name: " + c.name());
         }
 
         String dataFile = tableName + SwanFile.EXTENSION;
@@ -88,10 +78,9 @@ public final class StorageEngine {
     public void copyFile(String tableName, String csvFilePath) {
         long start = System.nanoTime();
         Catalog.TableEntry table = catalog.getTable(tableName);
-        if (table.partitions != null && !table.partitions.isEmpty()) {
+        if (table.partitions != null && !table.partitions.isEmpty())
             throw new UnsupportedOperationException(
                     "table " + tableName + " already has data; appending not supported");
-        }
 
         Path csvPath = Path.of(csvFilePath);
         List<Object[]> rows;
@@ -165,9 +154,7 @@ public final class StorageEngine {
                 break;
             }
         }
-        if (filterCol == null) {
-            throw new IllegalArgumentException("unknown column: " + columnName);
-        }
+        if (filterCol == null) throw new IllegalArgumentException("unknown column: " + columnName);
         validateConstant(filterCol, constant);
 
         List<Object[]> out = new ArrayList<>();
@@ -246,26 +233,21 @@ public final class StorageEngine {
 
     /** Stats from the most recent {@link #select} call. */
     public ScanStats lastScanStats() {
-        if (lastScanStats == null) {
-            throw new IllegalStateException("no select has been executed yet");
-        }
+        if (lastScanStats == null) throw new IllegalStateException("no select has been executed yet");
         return lastScanStats;
     }
 
     private static void validateConstant(ColumnSpec col, Object constant) {
-        if (constant == null) {
-            throw new IllegalArgumentException("constant must not be null");
-        }
+        if (constant == null) throw new IllegalArgumentException("constant must not be null");
         boolean ok = switch (col.type()) {
             case STRING -> constant instanceof String;
             case LONG -> constant instanceof Long;
             case DOUBLE -> constant instanceof Double;
         };
-        if (!ok) {
+        if (!ok)
             throw new IllegalArgumentException(
                     "constant type mismatch for column " + col.name()
                             + ": expected " + col.type() + " got " + constant.getClass().getSimpleName());
-        }
     }
 
     private static boolean matches(Comparison comparison, ColumnType type,

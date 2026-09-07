@@ -43,10 +43,9 @@ public final class ValueCodec {
             case DOUBLE -> buf.putDouble((Double) value);
             case STRING -> {
                 byte[] bytes = ((String) value).getBytes(StandardCharsets.UTF_8);
-                if (bytes.length > MAX_STRING_LENGTH) {
+                if (bytes.length > MAX_STRING_LENGTH)
                     throw new IllegalArgumentException(
                             "string length " + bytes.length + " exceeds max " + MAX_STRING_LENGTH);
-                }
                 buf.putShort((short) bytes.length);
                 buf.put(bytes);
             }

@@ -116,32 +116,27 @@ public final class SwanFile {
             byte[] magic = new byte[MAGIC.length];
             header.get(magic);
             for (int i = 0; i < MAGIC.length; i++) {
-                if (magic[i] != MAGIC[i]) {
-                    throw new IllegalStateException("bad magic in " + path);
-                }
+                if (magic[i] != MAGIC[i]) throw new IllegalStateException("bad magic in " + path);
             }
             byte version = header.get();
-            if (version != VERSION) {
+            if (version != VERSION)
                 throw new IllegalStateException(
                         "unsupported swan version " + version + " in " + path);
-            }
 
             ByteBuffer meta = ByteBuffer.allocate(4 + schema.size());
             channel.read(meta);
             meta.flip();
             int columnCount = meta.getInt();
-            if (columnCount != schema.size()) {
+            if (columnCount != schema.size())
                 throw new IllegalStateException(
                         "schema column count mismatch in " + path
                                 + ": file=" + columnCount + " schema=" + schema.size());
-            }
             ColumnType[] types = new ColumnType[columnCount];
             for (int i = 0; i < columnCount; i++) {
                 types[i] = ColumnType.values()[meta.get()];
-                if (types[i] != schema.get(i).type()) {
+                if (types[i] != schema.get(i).type())
                     throw new IllegalStateException(
                             "schema type mismatch at column " + i + " in " + path);
-                }
             }
 
             ByteBuffer pcBuf = ByteBuffer.allocate(4);
@@ -167,9 +162,7 @@ public final class SwanFile {
                     ByteBuffer wrap = ByteBuffer.wrap(bytes);
                     while (wrap.hasRemaining()) {
                         int n = channel.read(wrap);
-                        if (n < 0) {
-                            throw new IllegalStateException("truncated file: " + path);
-                        }
+                        if (n < 0) throw new IllegalStateException("truncated file: " + path);
                     }
                     cols.add(ValueCodec.decodeColumn(types[c], bytes));
                 }

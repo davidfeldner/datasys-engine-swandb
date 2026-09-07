@@ -28,12 +28,8 @@ public final class MinMax {
         Object max = values.get(0);
         for (int i = 1; i < values.size(); i++) {
             Object v = values.get(i);
-            if (compare(type, v, min) < 0) {
-                min = v;
-            }
-            if (compare(type, v, max) > 0) {
-                max = v;
-            }
+            if (compare(type, v, min) < 0) min = v;
+            if (compare(type, v, max) > 0) max = v;
         }
         return new Result(min, max);
     }

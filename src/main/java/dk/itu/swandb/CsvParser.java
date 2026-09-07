@@ -22,11 +22,10 @@ public final class CsvParser {
     public static Object[] parseLine(String line, int lineNumber, String fileName,
                                      List<ColumnSpec> schema) {
         String[] fields = line.split(",", -1);
-        if (fields.length != schema.size()) {
+        if (fields.length != schema.size())
             throw new IllegalArgumentException(
                     "malformed CSV in " + fileName + " line " + lineNumber
                             + ": expected " + schema.size() + " fields but got " + fields.length);
-        }
         Object[] row = new Object[schema.size()];
         for (int i = 0; i < schema.size(); i++) {
             row[i] = parseValue(fields[i], schema.get(i), fileName, lineNumber, i);
