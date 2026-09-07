@@ -17,10 +17,9 @@ public final class Pruning {
      */
     public static boolean canPrune(Comparison comparison, Object constant,
                                    Object min, Object max, ColumnType type) {
-        if (min == null || max == null) {
+        if (min == null || max == null)
             // Empty partition; reading it is safe but never yields rows.
             return true;
-        }
         return switch (comparison) {
             // constant strictly below min OR strictly above max -> no match possible
             case EQUALS -> MinMax.compare(type, constant, min) < 0

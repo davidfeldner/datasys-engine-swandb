@@ -109,11 +109,8 @@ public final class Catalog {
 
     private void load() {
         try {
-            if (Files.exists(file)) {
-                doc = MAPPER.readValue(file.toFile(), Document.class);
-            } else {
-                doc = new Document();
-            }
+            if (Files.exists(file)) doc = MAPPER.readValue(file.toFile(), Document.class);
+            else doc = new Document();
         } catch (IOException e) {
             throw new IllegalStateException("failed to read catalog at " + file, e);
         }
@@ -135,9 +132,7 @@ public final class Catalog {
 
     public TableEntry getTable(String tableName) {
         TableEntry t = doc.tables.get(tableName);
-        if (t == null) {
-            throw new IllegalArgumentException("unknown table: " + tableName);
-        }
+        if (t == null) throw new IllegalArgumentException("unknown table: " + tableName);
         return t;
     }
 

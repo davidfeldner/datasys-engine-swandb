@@ -5,11 +5,7 @@ package dk.itu.swandb;
  */
 public record ColumnSpec(String name, ColumnType type) {
     public ColumnSpec {
-        if (name == null || name.isEmpty()) {
-            throw new IllegalArgumentException("column name must not be empty");
-        }
-        if (type == null) {
-            throw new IllegalArgumentException("column type must not be null");
-        }
+        if (name == null || name.isEmpty()) throw new IllegalArgumentException("column name must not be empty");
+        if (type == null) throw new IllegalArgumentException("column type must not be null");
     }
 }
