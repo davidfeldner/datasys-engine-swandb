@@ -16,7 +16,7 @@ final class Pruning {
      *         {@code false} if it must be read.
      */
     static boolean canPrune(Comparison comparison, Object constant,
-                                   Object min, Object max, ColumnType type) {
+                            Object min, Object max, ColumnType type) {
         if (min == null || max == null)
             // Empty partition; reading it is safe but never yields rows.
             return true;

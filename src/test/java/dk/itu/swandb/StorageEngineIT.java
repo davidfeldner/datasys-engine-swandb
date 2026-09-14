@@ -168,6 +168,46 @@ class StorageEngineIT {
     }
 
     @Test
+    void stringValuesPreserveWhitespace(@TempDir Path tmp) throws Exception {
+        StorageEngine engine = new StorageEngine(tmp);
+        engine.createTable("trips", TRIPS_SCHEMA);
+        Path csv = copyResource(tmp, "trips_spaces.csv");
+        engine.copyFile("trips", csv.toString());
+
+        // Row 0's city has a trailing space; it must survive the CSV read,
+        // the binary write, and the read back out, unchanged.
+        List<Object[]> all = engine.select("trips", "distance", Comparison.GREATER_THAN, -1L);
+        assertRowsEqual(
+                List.<Object[]>of(
+                        new Object[]{"Copenhagen ", 12L, 23.5},
+                        new Object[]{"Aarhus", 187L, 301.0},
+                        new Object[]{"Copenhagen", 88L, 99.99}),
+                all);
+
+        // Equality must distinguish the padded value from the unpadded one.
+        assertRowsEqual(
+                List.<Object[]>of(new Object[]{"Copenhagen", 88L, 99.99}),
+                engine.select("trips", "city", Comparison.EQUALS, "Copenhagen"));
+        assertRowsEqual(
+                List.<Object[]>of(new Object[]{"Copenhagen ", 12L, 23.5}),
+                engine.select("trips", "city", Comparison.EQUALS, "Copenhagen "));
+
+        // Ordering: "Copenhagen" < "Copenhagen " because the padded value is
+        // the longer string with an identical prefix.
+        assertRowsEqual(
+                List.<Object[]>of(new Object[]{"Aarhus", 187L, 301.0}),
+                engine.select("trips", "city", Comparison.LESS_THAN, "Copenhagen"));
+        assertRowsEqual(
+                List.<Object[]>of(new Object[]{"Copenhagen ", 12L, 23.5}),
+                engine.select("trips", "city", Comparison.GREATER_THAN, "Copenhagen"));
+
+        // The persisted min/max must reflect the preserved value too.
+        Catalog.TableEntry table = new Catalog(tmp).getTable("trips");
+        assertEquals("Aarhus", summary(table, 0, "city").min());
+        assertEquals("Copenhagen ", summary(table, 0, "city").max());
+    }
+
+    @Test
     void emptyResult(@TempDir Path tmp) throws Exception {
         StorageEngine engine = new StorageEngine(tmp);
         engine.createTable("trips", TRIPS_SCHEMA);

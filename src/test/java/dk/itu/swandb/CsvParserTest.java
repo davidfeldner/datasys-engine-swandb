@@ -2,7 +2,9 @@ package dk.itu.swandb;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,6 +25,52 @@ class CsvParserTest {
         assertEquals("Copenhagen", row[0]);
         assertEquals(12L, row[1]);
         assertEquals(23.5, row[2]);
+    }
+
+    @Test
+    void stringFieldKeepsSurroundingSpaces() {
+        // Spaces inside a string field are data, not padding.
+        Object[] row = CsvParser.parseLine(" Copenhagen ,12,23.5", 1, "f.csv", SCHEMA);
+        assertEquals(" Copenhagen ", row[0]);
+    }
+
+    @Test
+    void whitespaceOnlyStringFieldIsKept() {
+        Object[] row = CsvParser.parseLine(" ,12,23.5", 1, "f.csv", SCHEMA);
+        assertEquals(" ", row[0]);
+    }
+
+    @Test
+    void emptyStringFieldIsKept() {
+        Object[] row = CsvParser.parseLine(",12,23.5", 1, "f.csv", SCHEMA);
+        assertEquals("", row[0]);
+    }
+
+    @Test
+    void paddedStringIsNotEqualToUnpadded() {
+        Object[] padded = CsvParser.parseLine("Copenhagen ,12,23.5", 1, "f.csv", SCHEMA);
+        Object[] plain = CsvParser.parseLine("Copenhagen,12,23.5", 1, "f.csv", SCHEMA);
+        assertNotEquals(padded[0], plain[0]);
+        // ...and the padding changes lexicographic order, as it must.
+        assertTrue(((String) plain[0]).compareTo((String) padded[0]) < 0);
+    }
+
+    @Test
+    void numericFieldsTolerateSurroundingWhitespace() {
+        // Whitespace around a numeric literal does not change the number.
+        Object[] row = CsvParser.parseLine("Copenhagen, 12 , 23.5 ", 1, "f.csv", SCHEMA);
+        assertEquals("Copenhagen", row[0]);
+        assertEquals(12L, row[1]);
+        assertEquals(23.5, row[2]);
+    }
+
+    @Test
+    void malformedNumericErrorQuotesOriginalField() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> CsvParser.parseLine("Copenhagen, xyz ,23.5", 3, "f.csv", SCHEMA));
+        assertEquals(
+                "malformed CSV in f.csv line 3 column 1 (distance): cannot parse ' xyz ' as LONG",
+                e.getMessage());
     }
 
     @Test
