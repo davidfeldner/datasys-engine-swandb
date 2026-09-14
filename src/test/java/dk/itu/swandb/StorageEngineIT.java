@@ -57,6 +57,19 @@ class StorageEngineIT {
     }
 
     @Test
+    void schemaAccessorReturnsColumnsInOrder(@TempDir Path tmp) {
+        StorageEngine engine = new StorageEngine(tmp);
+        engine.createTable("trips", TRIPS_SCHEMA);
+
+        assertEquals(TRIPS_SCHEMA, engine.schema("trips"));
+
+        // A restart must answer from the persisted catalog, as select does.
+        assertEquals(TRIPS_SCHEMA, new StorageEngine(tmp).schema("trips"));
+
+        assertThrows(IllegalArgumentException.class, () -> engine.schema("missing"));
+    }
+
+    @Test
     void duplicateTableThrows(@TempDir Path tmp) {
         StorageEngine engine = new StorageEngine(tmp);
         engine.createTable("trips", TRIPS_SCHEMA);

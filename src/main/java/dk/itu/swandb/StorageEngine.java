@@ -58,6 +58,29 @@ public final class StorageEngine {
         return maxRowsPerPartition;
     }
 
+    /**
+     * The table's schema, in column order. Throws
+     * {@link IllegalArgumentException} if the table is unknown. Read-only:
+     * it exists so the SQL binder can validate names and types against the
+     * catalog without going through a scan.
+     */
+    public List<ColumnSpec> schema(String tableName) {
+        long start = System.nanoTime();
+        try {
+            Catalog.TableEntry table = catalog.getTable(tableName);
+            List<ColumnSpec> columns = List.copyOf(table.columns);
+            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            LOGGER.debug("table={} columns={} durationMs={}",
+                    sanitizeForLog(tableName), columns.size(), durationMs);
+            return columns;
+        } catch (RuntimeException e) {
+            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            LOGGER.debug("table={} error={} durationMs={}",
+                    sanitizeForLog(tableName), e.getClass().getSimpleName(), durationMs);
+            throw e;
+        }
+    }
+
     /** Persist a new table schema. */
     public void createTable(String tableName, List<ColumnSpec> columns) {
         long start = System.nanoTime();
@@ -283,12 +306,7 @@ public final class StorageEngine {
     private static void validateConstant(ColumnSpec col, Object constant) {
         if (constant == null)
             throw new IllegalArgumentException("constant must not be null");
-        boolean ok = switch (col.type()) {
-            case STRING -> constant instanceof String;
-            case LONG -> constant instanceof Long;
-            case DOUBLE -> constant instanceof Double;
-        };
-        if (!ok)
+        if (!col.type().accepts(constant))
             throw new IllegalArgumentException(
                     "constant type mismatch for column " + col.name()
                             + ": expected " + col.type() + " got " + constant.getClass().getSimpleName());
