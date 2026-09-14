@@ -7,6 +7,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import dk.itu.swandb.enums.ColumnType;
+import dk.itu.swandb.enums.Comparison;
+
 /**
  * Entry point for {@code mvn exec:java}. Loads the golden trips CSV
  * into a fresh engine rooted under a local data directory and prints the
@@ -22,44 +25,49 @@ public final class Engine {
     public static void main(String[] args) {
         MDC.put("sessionId", UUID.randomUUID().toString());
         MDC.put("statementNumber", "0");
-        LOGGER.debug("engine started");
+        try {
+            LOGGER.debug("engine started");
 
-        Path dataDir = Path.of("engine-data");
-        StorageEngine engine = new StorageEngine(dataDir);
+            Path dataDir = Path.of("engine-data");
+            StorageEngine engine = new StorageEngine(dataDir);
 
-        boolean alreadyLoaded = new Catalog(dataDir).hasTable("trips");
-        if (alreadyLoaded) {
-            LOGGER.debug("table=trips already loaded; skipping createTable and copyFile");
-        } else {
-            engine.createTable("trips", List.of(
-                    new ColumnSpec("city", ColumnType.STRING),
-                    new ColumnSpec("distance", ColumnType.LONG),
-                    new ColumnSpec("price", ColumnType.DOUBLE)));
+            boolean alreadyLoaded = new Catalog(dataDir).hasTable("trips");
+            if (alreadyLoaded) {
+                LOGGER.debug("table=trips already loaded; skipping createTable and copyFile");
+            } else {
+                engine.createTable("trips", List.of(
+                        new ColumnSpec("city", ColumnType.STRING),
+                        new ColumnSpec("distance", ColumnType.LONG),
+                        new ColumnSpec("price", ColumnType.DOUBLE)));
 
-            engine.copyFile("trips", "src/test/resources/trips.csv");
+                engine.copyFile("trips", "src/test/resources/trips.csv");
+            }
+
+            System.out.println("Predicate: distance GREATER_THAN 100");
+            List<Object[]> byDistance = engine.select("trips", "distance",
+                    Comparison.GREATER_THAN, 100L);
+            for (Object[] row : byDistance) {
+                System.out.println("  " + row[0] + " " + row[1] + " " + row[2]);
+            }
+
+            System.out.println("Predicate: city EQUALS Copenhagen");
+            List<Object[]> byCity = engine.select("trips", "city",
+                    Comparison.EQUALS, "Copenhagen");
+            for (Object[] row : byCity) {
+                System.out.println("  " + row[0] + " " + row[1] + " " + row[2]);
+            }
+
+            System.out.println("Predicate: price LESS_THAN 50.0");
+            List<Object[]> byPrice = engine.select("trips", "price",
+                    Comparison.LESS_THAN, 50.0);
+            for (Object[] row : byPrice) {
+                System.out.println("  " + row[0] + " " + row[1] + " " + row[2]);
+            }
+
+            LOGGER.debug("engine stopped");
+        } finally {
+            MDC.remove("statementNumber");
+            MDC.remove("sessionId");
         }
-
-        System.out.println("Predicate: distance GREATER_THAN 100");
-        List<Object[]> byDistance = engine.select("trips", "distance",
-                Comparison.GREATER_THAN, 100L);
-        for (Object[] row : byDistance) {
-            System.out.println("  " + row[0] + " " + row[1] + " " + row[2]);
-        }
-
-        System.out.println("Predicate: city EQUALS Copenhagen");
-        List<Object[]> byCity = engine.select("trips", "city",
-                Comparison.EQUALS, "Copenhagen");
-        for (Object[] row : byCity) {
-            System.out.println("  " + row[0] + " " + row[1] + " " + row[2]);
-        }
-
-        System.out.println("Predicate: price LESS_THAN 50.0");
-        List<Object[]> byPrice = engine.select("trips", "price",
-                Comparison.LESS_THAN, 50.0);
-        for (Object[] row : byPrice) {
-            System.out.println("  " + row[0] + " " + row[1] + " " + row[2]);
-        }
-
-        LOGGER.debug("engine stopped");
     }
 }

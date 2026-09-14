@@ -7,6 +7,8 @@ import java.nio.ByteBuffer;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
+import dk.itu.swandb.enums.ColumnType;
+
 class ValueCodecTest {
 
     @Test

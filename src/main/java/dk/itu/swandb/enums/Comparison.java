@@ -1,4 +1,4 @@
-package dk.itu.swandb;
+package dk.itu.swandb.enums;
 
 /**
  * Supported comparison operators for filtered scans.

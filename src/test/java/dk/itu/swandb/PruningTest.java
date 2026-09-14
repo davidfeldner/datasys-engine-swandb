@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
+import dk.itu.swandb.enums.ColumnType;
+import dk.itu.swandb.enums.Comparison;
+
 class PruningTest {
 
     @Test

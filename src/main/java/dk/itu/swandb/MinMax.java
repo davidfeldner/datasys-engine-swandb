@@ -2,6 +2,8 @@ package dk.itu.swandb;
 
 import java.util.List;
 
+import dk.itu.swandb.enums.ColumnType;
+
 /**
  * Computes a min/max pair over a list of values, using the comparison
  * semantics of the column type (numeric for LONG/DOUBLE, lexicographic

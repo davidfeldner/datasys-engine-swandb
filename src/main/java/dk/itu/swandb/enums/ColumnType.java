@@ -1,4 +1,4 @@
-package dk.itu.swandb;
+package dk.itu.swandb.enums;
 
 /**
  * Supported column types in the storage engine.

@@ -12,6 +12,9 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import dk.itu.swandb.enums.ColumnType;
+import dk.itu.swandb.enums.Comparison;
+
 /**
  * End-to-end tests driving the public {@link StorageEngine} API.
  * Runs under the Failsafe plugin (mvn verify), not Surefire.
@@ -64,11 +67,22 @@ class StorageEngineIT {
         List<Object[]> rows = engine.select("trips", "distance", Comparison.GREATER_THAN, -1L);
         assertEquals(8, rows.size());
 
-        // Verify each value has the correct Java type and content.
-        Object[] first = rows.get(0);
-        assertEquals("Copenhagen", first[0]);
-        assertEquals(12L, first[1]);
-        assertEquals(23.5, first[2]);
+        // Verify all rows have the correct Java type and content (order matches CSV).
+        Object[][] expected = {
+                new Object[]{"Copenhagen", 12L, 23.5},
+                new Object[]{"Aarhus", 187L, 301.0},
+                new Object[]{"Odense", 95L, 120.75},
+                new Object[]{"Copenhagen", 140L, 210.0},
+                new Object[]{"Aalborg", 210L, 340.5},
+                new Object[]{"Roskilde", 31L, 45.0},
+                new Object[]{"Copenhagen", 88L, 99.99},
+                new Object[]{"Esbjerg", 299L, 450.25}
+        };
+        for (int i = 0; i < expected.length; i++) {
+            assertEquals(expected[i][0], rows.get(i)[0], "city mismatch at row " + i);
+            assertEquals(expected[i][1], rows.get(i)[1], "distance mismatch at row " + i);
+            assertEquals(expected[i][2], rows.get(i)[2], "price mismatch at row " + i);
+        }
     }
 
     @Test
@@ -163,6 +177,40 @@ class StorageEngineIT {
         // 4 partitions => 4 distinct indexes
         int count = json.split("\"index\" : ").length - 1;
         assertEquals(4, count);
+
+        // Verify persisted min/max values for each partition by reading the catalog back
+        Catalog catalog = new Catalog(tmp);
+        Catalog.TableEntry table = catalog.getTable("trips");
+        assertEquals(4, table.partitions.size());
+
+        // Partition 0: Copenhagen,12,23.5 / Aarhus,187,301.0
+        verifyPartitionMinMax(table.partitions.get(0), "city", "Aarhus", "Copenhagen");
+        verifyPartitionMinMax(table.partitions.get(0), "distance", 12L, 187L);
+        verifyPartitionMinMax(table.partitions.get(0), "price", 23.5, 301.0);
+
+        // Partition 1: Odense,95,120.75 / Copenhagen,140,210.0
+        verifyPartitionMinMax(table.partitions.get(1), "city", "Copenhagen", "Odense");
+        verifyPartitionMinMax(table.partitions.get(1), "distance", 95L, 140L);
+        verifyPartitionMinMax(table.partitions.get(1), "price", 120.75, 210.0);
+
+        // Partition 2: Aalborg,210,340.5 / Roskilde,31,45.0
+        verifyPartitionMinMax(table.partitions.get(2), "city", "Aalborg", "Roskilde");
+        verifyPartitionMinMax(table.partitions.get(2), "distance", 31L, 210L);
+        verifyPartitionMinMax(table.partitions.get(2), "price", 45.0, 340.5);
+
+        // Partition 3: Copenhagen,88,99.99 / Esbjerg,299,450.25
+        verifyPartitionMinMax(table.partitions.get(3), "city", "Copenhagen", "Esbjerg");
+        verifyPartitionMinMax(table.partitions.get(3), "distance", 88L, 299L);
+        verifyPartitionMinMax(table.partitions.get(3), "price", 99.99, 450.25);
+    }
+
+    private static void verifyPartitionMinMax(Catalog.PartitionEntry partition, String columnName, Object expectedMin, Object expectedMax) {
+        Catalog.ColumnSummary summary = partition.columns.stream()
+                .filter(cs -> cs.name().equals(columnName))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("Missing column summary for " + columnName));
+        assertEquals(expectedMin, summary.min(), "min mismatch for " + columnName + " in partition " + partition.index());
+        assertEquals(expectedMax, summary.max(), "max mismatch for " + columnName + " in partition " + partition.index());
     }
 
     @Test

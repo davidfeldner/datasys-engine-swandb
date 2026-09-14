@@ -1,5 +1,8 @@
 package dk.itu.swandb;
 
+import dk.itu.swandb.enums.ColumnType;
+import dk.itu.swandb.enums.Comparison;
+
 /**
  * Decides whether a partition can be skipped based on its min/max range
  * and a single-column comparison predicate. Used by the scan loop to

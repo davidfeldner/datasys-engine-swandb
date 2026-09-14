@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
+import dk.itu.swandb.enums.ColumnType;
+
 /**
  * Encodes and decodes primitive values into the on-disk format.
  *

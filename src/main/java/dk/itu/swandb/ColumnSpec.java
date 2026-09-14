@@ -1,5 +1,7 @@
 package dk.itu.swandb;
 
+import dk.itu.swandb.enums.ColumnType;
+
 /**
  * Names and types of one column in a table.
  */

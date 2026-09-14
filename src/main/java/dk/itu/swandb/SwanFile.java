@@ -8,6 +8,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import dk.itu.swandb.enums.ColumnType;
+
 /**
  * Reader/writer for the {@code .swan} binary file format. Layout:
  *

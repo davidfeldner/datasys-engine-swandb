@@ -19,8 +19,8 @@ public final class CsvParser {
     }
 
     /** Parse a single CSV line into typed values for the given schema. */
-    public static Object[] parseLine(String line, int lineNumber, String fileName,
-                                     List<ColumnSpec> schema) {
+    static Object[] parseLine(String line, int lineNumber, String fileName,
+            List<ColumnSpec> schema) {
         String[] fields = line.split(",", -1);
         if (fields.length != schema.size())
             throw new IllegalArgumentException(
@@ -34,7 +34,7 @@ public final class CsvParser {
     }
 
     private static Object parseValue(String raw, ColumnSpec spec, String fileName,
-                                     int lineNumber, int columnIndex) {
+            int lineNumber, int columnIndex) {
         String field = raw.trim();
         try {
             return switch (spec.type()) {
@@ -46,7 +46,8 @@ public final class CsvParser {
             throw new IllegalArgumentException(
                     "malformed CSV in " + fileName + " line " + lineNumber
                             + " column " + columnIndex + " (" + spec.name()
-                            + "): cannot parse '" + field + "' as " + spec.type(), e);
+                            + "): cannot parse '" + field + "' as " + spec.type(),
+                    e);
         }
     }
 

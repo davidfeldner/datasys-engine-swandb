@@ -10,6 +10,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import dk.itu.swandb.enums.ColumnType;
+
 class CsvParserTest {
 
     private static final List<ColumnSpec> SCHEMA = List.of(

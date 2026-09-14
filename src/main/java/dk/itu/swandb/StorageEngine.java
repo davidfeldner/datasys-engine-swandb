@@ -3,6 +3,9 @@ package dk.itu.swandb;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import dk.itu.swandb.enums.ColumnType;
+import dk.itu.swandb.enums.Comparison;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,7 +42,8 @@ public final class StorageEngine {
      * partition size than the production default.
      */
     public StorageEngine(Path dataDirectory, int maxRowsPerPartition) {
-        if (maxRowsPerPartition <= 0) throw new IllegalArgumentException("maxRowsPerPartition must be > 0");
+        if (maxRowsPerPartition <= 0)
+            throw new IllegalArgumentException("maxRowsPerPartition must be > 0");
         this.dataDir = dataDirectory;
         this.maxRowsPerPartition = maxRowsPerPartition;
         try {
@@ -57,12 +61,16 @@ public final class StorageEngine {
     /** Persist a new table schema. */
     public void createTable(String tableName, List<ColumnSpec> columns) {
         long start = System.nanoTime();
-        if (tableName == null || tableName.isEmpty()) throw new IllegalArgumentException("table name must not be empty");
-        if (columns == null || columns.isEmpty()) throw new IllegalArgumentException("column list must not be empty");
-        if (catalog.hasTable(tableName)) throw new IllegalArgumentException("table already exists: " + tableName);
+        if (tableName == null || tableName.isEmpty())
+            throw new IllegalArgumentException("table name must not be empty");
+        if (columns == null || columns.isEmpty())
+            throw new IllegalArgumentException("column list must not be empty");
+        if (catalog.hasTable(tableName))
+            throw new IllegalArgumentException("table already exists: " + tableName);
         Set<String> seen = new HashSet<>();
         for (ColumnSpec c : columns) {
-            if (!seen.add(c.name())) throw new IllegalArgumentException("duplicate column name: " + c.name());
+            if (!seen.add(c.name()))
+                throw new IllegalArgumentException("duplicate column name: " + c.name());
         }
 
         String dataFile = tableName + SwanFile.EXTENSION;
@@ -141,104 +149,124 @@ public final class StorageEngine {
 
     /** Filtered scan over the binary store. */
     public List<Object[]> select(String tableName, String columnName,
-                                 Comparison comparison, Object constant) {
+            Comparison comparison, Object constant) {
         long start = System.nanoTime();
-        Catalog.TableEntry table = catalog.getTable(tableName);
+        String safeConst = sanitizeForLog(constant);
+        try {
+            Catalog.TableEntry table = catalog.getTable(tableName);
 
-        int columnIndex = -1;
-        ColumnSpec filterCol = null;
-        for (int i = 0; i < table.columns.size(); i++) {
-            if (table.columns.get(i).name().equals(columnName)) {
-                columnIndex = i;
-                filterCol = table.columns.get(i);
-                break;
-            }
-        }
-        if (filterCol == null) throw new IllegalArgumentException("unknown column: " + columnName);
-        validateConstant(filterCol, constant);
-
-        List<Object[]> out = new ArrayList<>();
-        int total = table.partitions.size();
-        int pruned = 0;
-        int read = 0;
-
-        if (total == 0) {
-            long durationMs = (System.nanoTime() - start) / 1_000_000L;
-            lastScanStats = new ScanStats(0, 0, 0);
-            LOGGER.debug("table={} column={} comparison={} const={} partitionsTotal=0 partitionsRead=0 partitionsPruned=0 rowsOut=0 durationMs={}",
-                    tableName, columnName, comparison, constant, durationMs);
-            return out;
-        }
-
-        Path dataPath = dataDir.resolve(table.dataFile);
-
-        for (Catalog.PartitionEntry pe : table.partitions) {
-            Catalog.ColumnSummary sum = null;
-            for (Catalog.ColumnSummary s : pe.columns) {
-                if (s.name().equals(columnName)) {
-                    sum = s;
+            int columnIndex = -1;
+            ColumnSpec filterCol = null;
+            for (int i = 0; i < table.columns.size(); i++) {
+                if (table.columns.get(i).name().equals(columnName)) {
+                    columnIndex = i;
+                    filterCol = table.columns.get(i);
                     break;
                 }
             }
-            // Filter by catalog min/max first; only hit disk when we must.
-            boolean canPrune = Pruning.canPrune(comparison, constant,
-                    sum == null ? null : sum.min(),
-                    sum == null ? null : sum.max(),
-                    filterCol.type());
-            if (canPrune) {
-                pruned++;
-                LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                        tableName, columnName, comparison, constant, pe.index(),
+            if (filterCol == null)
+                throw new IllegalArgumentException("unknown column: " + columnName);
+            validateConstant(filterCol, constant);
+
+            List<Object[]> out = new ArrayList<>();
+            int total = table.partitions.size();
+            int pruned = 0;
+            int read = 0;
+
+            if (total == 0) {
+                long durationMs = (System.nanoTime() - start) / 1_000_000L;
+                lastScanStats = new ScanStats(0, 0, 0);
+                LOGGER.debug(
+                        "table={} column={} comparison={} const={} partitionsTotal=0 partitionsRead=0 partitionsPruned=0 rowsOut=0 durationMs={}",
+                        tableName, columnName, comparison, safeConst, durationMs);
+                return out;
+            }
+
+            Path dataPath = dataDir.resolve(table.dataFile);
+
+            for (Catalog.PartitionEntry pe : table.partitions) {
+                Catalog.ColumnSummary sum = null;
+                for (Catalog.ColumnSummary s : pe.columns) {
+                    if (s.name().equals(columnName)) {
+                        sum = s;
+                        break;
+                    }
+                }
+                // Filter by catalog min/max first; only hit disk when we must.
+                boolean canPrune = Pruning.canPrune(comparison, constant,
                         sum == null ? null : sum.min(),
                         sum == null ? null : sum.max(),
-                        "PRUNED");
-                continue;
-            }
-            read++;
-            LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                    tableName, columnName, comparison, constant, pe.index(),
-                    sum == null ? null : sum.min(),
-                    sum == null ? null : sum.max(),
-                    "READ");
+                        filterCol.type());
+                if (canPrune) {
+                    pruned++;
+                    LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
+                            tableName, columnName, comparison, safeConst, pe.index(),
+                            sum == null ? null : sum.min(),
+                            sum == null ? null : sum.max(),
+                            "PRUNED");
+                    continue;
+                }
+                read++;
+                LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
+                        tableName, columnName, comparison, safeConst, pe.index(),
+                        sum == null ? null : sum.min(),
+                        sum == null ? null : sum.max(),
+                        "READ");
 
-            SwanFile.Partition part;
-            try {
-                // Per-call full read is simple; the format also supports
-                // seeking straight to a single partition.
-                List<SwanFile.Partition> all = SwanFile.readAll(dataPath, table.columns);
-                part = all.get(pe.index());
-            } catch (IOException e) {
-                throw new IllegalStateException("failed to read " + dataPath, e);
-            }
+                SwanFile.Partition part;
+                try {
+                    // Per-call full read is simple; the format also supports
+                    // seeking straight to a single partition.
+                    List<SwanFile.Partition> all = SwanFile.readAll(dataPath, table.columns);
+                    part = all.get(pe.index());
+                } catch (IOException e) {
+                    throw new IllegalStateException("failed to read " + dataPath, e);
+                }
 
-            List<Object> filterValues = part.columnValues.get(columnIndex);
-            for (int r = 0; r < part.rowCount; r++) {
-                Object v = filterValues.get(r);
-                if (matches(comparison, filterCol.type(), constant, v)) {
-                    Object[] row = new Object[table.columns.size()];
-                    for (int c = 0; c < table.columns.size(); c++) {
-                        row[c] = part.columnValues.get(c).get(r);
+                List<Object> filterValues = part.columnValues.get(columnIndex);
+                for (int r = 0; r < part.rowCount; r++) {
+                    Object v = filterValues.get(r);
+                    if (matches(comparison, filterCol.type(), constant, v)) {
+                        Object[] row = new Object[table.columns.size()];
+                        for (int c = 0; c < table.columns.size(); c++) {
+                            row[c] = part.columnValues.get(c).get(r);
+                        }
+                        out.add(row);
                     }
-                    out.add(row);
                 }
             }
-        }
 
-        long durationMs = (System.nanoTime() - start) / 1_000_000L;
-        lastScanStats = new ScanStats(total, read, pruned);
-        LOGGER.debug("table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
-                tableName, columnName, comparison, constant, read, pruned, out.size(), durationMs);
-        return out;
+            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            lastScanStats = new ScanStats(total, read, pruned);
+            LOGGER.debug(
+                    "table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
+                    tableName, columnName, comparison, safeConst, read, pruned, out.size(), durationMs);
+            return out;
+        } catch (RuntimeException e) {
+            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            LOGGER.debug("table={} column={} comparison={} const={} error={} durationMs={}",
+                    tableName, columnName, comparison, safeConst, e.getClass().getSimpleName(), durationMs);
+            throw e;
+        }
+    }
+
+    /** Replace commas in value's toString to keep log lines CSV-safe. */
+    private static String sanitizeForLog(Object value) {
+        if (value == null)
+            return "null";
+        return value.toString().replace(",", "\\,");
     }
 
     /** Stats from the most recent {@link #select} call. */
     public ScanStats lastScanStats() {
-        if (lastScanStats == null) throw new IllegalStateException("no select has been executed yet");
+        if (lastScanStats == null)
+            throw new IllegalStateException("no select has been executed yet");
         return lastScanStats;
     }
 
     private static void validateConstant(ColumnSpec col, Object constant) {
-        if (constant == null) throw new IllegalArgumentException("constant must not be null");
+        if (constant == null)
+            throw new IllegalArgumentException("constant must not be null");
         boolean ok = switch (col.type()) {
             case STRING -> constant instanceof String;
             case LONG -> constant instanceof Long;
@@ -251,7 +279,7 @@ public final class StorageEngine {
     }
 
     private static boolean matches(Comparison comparison, ColumnType type,
-                                   Object constant, Object value) {
+            Object constant, Object value) {
         int cmp = MinMax.compare(type, constant, value);
         return switch (comparison) {
             case EQUALS -> cmp == 0;

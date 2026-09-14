@@ -3,6 +3,8 @@ package dk.itu.swandb;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 
+import dk.itu.swandb.enums.ColumnType;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
