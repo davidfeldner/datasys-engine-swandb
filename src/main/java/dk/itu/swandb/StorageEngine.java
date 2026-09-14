@@ -123,10 +123,8 @@ public final class StorageEngine {
         Path dataPath = dataDir.resolve(table.dataFile);
         try {
             List<Long> partitionOffsets = SwanFile.write(dataPath, table.columns, partitions);
-            // Update partition entries with their file offsets
             for (int i = 0; i < partEntries.size(); i++) {
-                Catalog.PartitionEntry pe = partEntries.get(i);
-                partEntries.set(i, new Catalog.PartitionEntry(pe.index(), pe.rowCount(), pe.columns(), partitionOffsets.get(i)));
+                partEntries.get(i).offset = partitionOffsets.get(i);
             }
         } catch (IOException e) {
             throw new IllegalStateException("failed to write " + dataPath, e);
@@ -220,15 +218,11 @@ public final class StorageEngine {
 
                 SwanFile.Partition part;
                 try {
-                    // Read only the needed partition using its stored offset
                     long partitionOffset = pe.offset();
-                    if (partitionOffset < 0) {
-                        // Fallback for old catalogs without offsets
-                        List<SwanFile.Partition> all = SwanFile.readAll(dataPath, table.columns);
-                        part = all.get(pe.index());
-                    } else {
-                        part = SwanFile.readPartition(dataPath, table.columns, partitionOffset);
-                    }
+                    // Seek straight to the live partition; pruned partitions are never touched.
+                    // Fallback for catalogs written before offsets were tracked.
+                    if (partitionOffset < 0) part = SwanFile.readAll(dataPath, table.columns).get(pe.index());
+                    else part = SwanFile.readPartition(dataPath, table.columns, partitionOffset);
                 } catch (IOException e) {
                     throw new IllegalStateException("failed to read " + dataPath, e);
                 }

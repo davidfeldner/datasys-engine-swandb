@@ -59,7 +59,12 @@ public final class Catalog {
         public int index;
         public int rowCount;
         public List<ColumnSummary> columns;
-        public long offset; // byte offset of this partition in the .swan file
+        /**
+         * Byte offset of this partition in the {@code .swan} file. Defaults
+         * to -1, which is also what a catalog written before offset tracking
+         * deserialises to; the reader then falls back to a sequential scan.
+         */
+        public long offset = -1;
 
         public PartitionEntry() {
         }
@@ -68,14 +73,6 @@ public final class Catalog {
             this.index = index;
             this.rowCount = rowCount;
             this.columns = columns;
-            this.offset = -1;
-        }
-
-        public PartitionEntry(int index, int rowCount, List<ColumnSummary> columns, long offset) {
-            this.index = index;
-            this.rowCount = rowCount;
-            this.columns = columns;
-            this.offset = offset;
         }
 
         public int index() { return index; }

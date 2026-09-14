@@ -5,12 +5,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.enums.Comparison;
@@ -233,6 +238,76 @@ class StorageEngineIT {
         }
         assertTrue(distances.contains(210L));
         assertTrue(distances.contains(299L));
+    }
+
+    /**
+     * Guards the actual I/O pruning: a partition classified as PRUNED must
+     * never be decoded. The catalog records every partition's byte offset in
+     * the {@code .swan} file; corrupting the column-length prefix of the
+     * partitions that {@code distance > 200} prunes makes any attempt to read
+     * them fail, so this test passes only while {@code select} seeks straight
+     * to the live partition instead of scanning the whole file.
+     */
+    @Test
+    void prunedPartitionsAreNeverReadFromDisk(@TempDir Path tmp) throws Exception {
+        StorageEngine engine = new StorageEngine(tmp, 2);
+        engine.createTable("trips", TRIPS_SCHEMA);
+        Path csv = copyResource(tmp, "trips_sorted_by_distance.csv");
+        engine.copyFile("trips", csv.toString());
+
+        // Partitions 0-2 hold distances [12,31], [88,95], [140,187]. Overwrite
+        // the length prefix of their first column with -1 so decoding throws.
+        Catalog.TableEntry table = new Catalog(tmp).getTable("trips");
+        try (RandomAccessFile raf = new RandomAccessFile(tmp.resolve(table.dataFile).toFile(), "rw")) {
+            for (int i = 0; i < 3; i++) {
+                raf.seek(table.partitions.get(i).offset() + Integer.BYTES); // past rowCount
+                raf.writeInt(-1);
+            }
+        }
+
+        // A fresh engine reloads the same catalog. distance > 200 keeps only
+        // partition 3 (210, 299); reading a pruned partition would now blow up.
+        StorageEngine reopened = new StorageEngine(tmp, 2);
+        List<Object[]> rows = reopened.select("trips", "distance", Comparison.GREATER_THAN, 200L);
+        ScanStats stats = reopened.lastScanStats();
+
+        assertEquals(3, stats.partitionsPruned());
+        assertEquals(1, stats.partitionsRead());
+        List<Long> distances = new ArrayList<>();
+        for (Object[] row : rows) {
+            distances.add((Long) row[1]);
+        }
+        assertEquals(List.of(210L, 299L), distances);
+    }
+
+    /**
+     * A catalog written before offsets were tracked has no {@code offset}
+     * field; it must still answer selects by falling back to a sequential
+     * read instead of seeking to offset 0.
+     */
+    @Test
+    void catalogWithoutOffsetsFallsBackToSequentialRead(@TempDir Path tmp) throws Exception {
+        StorageEngine engine = new StorageEngine(tmp, 2);
+        engine.createTable("trips", TRIPS_SCHEMA);
+        Path csv = copyResource(tmp, "trips.csv");
+        engine.copyFile("trips", csv.toString());
+
+        // Strip every "offset" field from the catalog, as an older writer would.
+        Path catalogFile = tmp.resolve(Catalog.CATALOG_FILE);
+        ObjectMapper mapper = new ObjectMapper();
+        JsonNode root = mapper.readTree(catalogFile.toFile());
+        for (JsonNode tableNode : root.get("tables")) {
+            for (JsonNode partition : tableNode.get("partitions")) {
+                ((ObjectNode) partition).remove("offset");
+            }
+        }
+        mapper.writerWithDefaultPrettyPrinter().writeValue(catalogFile.toFile(), root);
+
+        StorageEngine reopened = new StorageEngine(tmp, 2);
+        assertEquals(-1, new Catalog(tmp).getTable("trips").partitions.get(0).offset());
+
+        List<Object[]> rows = reopened.select("trips", "distance", Comparison.GREATER_THAN, 100L);
+        assertEquals(4, rows.size()); // 187, 140, 210, 299
     }
 
     @Test
