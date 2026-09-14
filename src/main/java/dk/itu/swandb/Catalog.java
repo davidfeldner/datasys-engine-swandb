@@ -59,6 +59,7 @@ public final class Catalog {
         public int index;
         public int rowCount;
         public List<ColumnSummary> columns;
+        public long offset; // byte offset of this partition in the .swan file
 
         public PartitionEntry() {
         }
@@ -67,11 +68,20 @@ public final class Catalog {
             this.index = index;
             this.rowCount = rowCount;
             this.columns = columns;
+            this.offset = -1;
+        }
+
+        public PartitionEntry(int index, int rowCount, List<ColumnSummary> columns, long offset) {
+            this.index = index;
+            this.rowCount = rowCount;
+            this.columns = columns;
+            this.offset = offset;
         }
 
         public int index() { return index; }
         public int rowCount() { return rowCount; }
         public List<ColumnSummary> columns() { return columns; }
+        public long offset() { return offset; }
     }
 
     /** One table's catalog entry. */

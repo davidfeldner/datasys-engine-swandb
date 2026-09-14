@@ -55,9 +55,10 @@ public final class SwanFile {
     private SwanFile() {
     }
 
-    /** Write the file from scratch; overwrites any existing file. */
-    public static void write(Path path, List<ColumnSpec> schema, List<Partition> partitions)
+    /** Write the file from scratch; overwrites any existing file. Returns the byte offsets of each partition. */
+    public static List<Long> write(Path path, List<ColumnSpec> schema, List<Partition> partitions)
             throws IOException {
+        List<Long> partitionOffsets = new ArrayList<>(partitions.size());
         try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "rw");
              FileChannel channel = raf.getChannel()) {
             channel.truncate(0);
@@ -84,6 +85,9 @@ public final class SwanFile {
             channel.write(pcBuf);
 
             for (Partition p : partitions) {
+                // Record the offset of this partition (before writing rowCount)
+                partitionOffsets.add(channel.position());
+
                 ByteBuffer rcBuf = ByteBuffer.allocate(4);
                 rcBuf.putInt(p.rowCount);
                 rcBuf.flip();
@@ -104,6 +108,7 @@ public final class SwanFile {
                 }
             }
         }
+        return partitionOffsets;
     }
 
     /** Read all partitions from a file, returning them in on-disk order. */
@@ -148,29 +153,52 @@ public final class SwanFile {
 
             List<Partition> out = new ArrayList<>(partitionCount);
             for (int p = 0; p < partitionCount; p++) {
-                ByteBuffer rcBuf = ByteBuffer.allocate(4);
-                channel.read(rcBuf);
-                rcBuf.flip();
-                int rowCount = rcBuf.getInt();
-
-                List<List<Object>> cols = new ArrayList<>(columnCount);
-                for (int c = 0; c < columnCount; c++) {
-                    ByteBuffer lenBuf = ByteBuffer.allocate(4);
-                    channel.read(lenBuf);
-                    lenBuf.flip();
-                    int len = lenBuf.getInt();
-
-                    byte[] bytes = new byte[len];
-                    ByteBuffer wrap = ByteBuffer.wrap(bytes);
-                    while (wrap.hasRemaining()) {
-                        int n = channel.read(wrap);
-                        if (n < 0) throw new IllegalStateException("truncated file: " + path);
-                    }
-                    cols.add(ValueCodec.decodeColumn(types[c], bytes));
-                }
-                out.add(new Partition(rowCount, cols));
+                out.add(readPartitionInternal(channel, columnCount, types));
             }
             return out;
         }
+    }
+
+    /** Read a single partition at the given byte offset. */
+    public static Partition readPartition(Path path, List<ColumnSpec> schema, long offset)
+            throws IOException {
+        try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "r");
+             FileChannel channel = raf.getChannel()) {
+            channel.position(offset);
+            return readPartitionInternal(channel, schema.size(), getTypesFromSchema(schema));
+        }
+    }
+
+    private static ColumnType[] getTypesFromSchema(List<ColumnSpec> schema) {
+        ColumnType[] types = new ColumnType[schema.size()];
+        for (int i = 0; i < schema.size(); i++) {
+            types[i] = schema.get(i).type();
+        }
+        return types;
+    }
+
+    private static Partition readPartitionInternal(FileChannel channel, int columnCount, ColumnType[] types)
+            throws IOException {
+        ByteBuffer rcBuf = ByteBuffer.allocate(4);
+        channel.read(rcBuf);
+        rcBuf.flip();
+        int rowCount = rcBuf.getInt();
+
+        List<List<Object>> cols = new ArrayList<>(columnCount);
+        for (int c = 0; c < columnCount; c++) {
+            ByteBuffer lenBuf = ByteBuffer.allocate(4);
+            channel.read(lenBuf);
+            lenBuf.flip();
+            int len = lenBuf.getInt();
+
+            byte[] bytes = new byte[len];
+            ByteBuffer wrap = ByteBuffer.wrap(bytes);
+            while (wrap.hasRemaining()) {
+                int n = channel.read(wrap);
+                if (n < 0) throw new IllegalStateException("truncated file");
+            }
+            cols.add(ValueCodec.decodeColumn(types[c], bytes));
+        }
+        return new Partition(rowCount, cols);
     }
 }
