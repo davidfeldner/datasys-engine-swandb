@@ -1,6 +1,7 @@
 package dk.itu.swandb;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -328,6 +330,39 @@ class StorageEngineIT {
             assertEquals(fromA.get(i)[0], fromB.get(i)[0]);
             assertEquals(fromA.get(i)[1], fromB.get(i)[1]);
             assertEquals(fromA.get(i)[2], fromB.get(i)[2]);
+        }
+    }
+
+    /**
+     * The CSV log line must always parse into exactly seven comma-separated
+     * values, because the course reads them positionally. This drives commas
+     * through the table name, the column name, the CSV path, and the predicate
+     * constant, then checks every line written for this run.
+     */
+    @Test
+    void commaBearingValuesStillYieldSevenLogFields(@TempDir Path tmp) throws Exception {
+        String tag = UUID.randomUUID().toString();
+        String tableName = "tab," + tag;
+        String columnName = "ci,ty";
+        String constant = "Aarhus, DK " + tag;
+
+        StorageEngine engine = new StorageEngine(tmp, 2);
+        engine.createTable(tableName, List.of(new ColumnSpec(columnName, ColumnType.STRING)));
+
+        Path csv = tmp.resolve("a,b-" + tag + ".csv");
+        Files.writeString(csv, "value\n");
+        engine.copyFile(tableName, csv.toString());
+
+        try { engine.select(tableName, "no,pe", Comparison.EQUALS, constant); } catch (RuntimeException ignored) { }
+        engine.select(tableName, columnName, Comparison.EQUALS, constant);
+
+        List<String> lines = Files.readAllLines(Path.of("logs", "engine.log")).stream()
+                .filter(line -> line.contains(tag))
+                .toList();
+        assertFalse(lines.isEmpty(), "expected CSV log lines mentioning the probe tag");
+        for (String line : lines) {
+            assertEquals(7, line.split(",", -1).length,
+                    "log line must have exactly 7 fields: " + line);
         }
     }
 }

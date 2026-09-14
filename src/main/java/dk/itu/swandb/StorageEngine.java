@@ -79,7 +79,7 @@ public final class StorageEngine {
 
         long durationMs = (System.nanoTime() - start) / 1_000_000L;
         LOGGER.debug("table={} columns={} durationMs={}",
-                tableName, columns.size(), durationMs);
+                sanitizeForLog(tableName), columns.size(), durationMs);
     }
 
     /** Load a CSV file into the binary store, splitting into partitions. */
@@ -115,7 +115,8 @@ public final class StorageEngine {
                 MinMax.Result mm = MinMax.compute(spec.type(), part.columnValues.get(c));
                 summaries.add(new Catalog.ColumnSummary(spec.name(), spec.type(), mm.min(), mm.max()));
                 LOGGER.debug("table={} partition={} column={} min={} max={}",
-                        tableName, partitionIndex, spec.name(), mm.min(), mm.max());
+                        sanitizeForLog(tableName), partitionIndex, sanitizeForLog(spec.name()),
+                        sanitizeForLog(mm.min()), sanitizeForLog(mm.max()));
             }
             partEntries.add(new Catalog.PartitionEntry(partitionIndex, end - offset, summaries));
         }
@@ -135,7 +136,8 @@ public final class StorageEngine {
 
         long durationMs = (System.nanoTime() - start) / 1_000_000L;
         LOGGER.debug("table={} file={} rows={} partitions={} durationMs={}",
-                tableName, csvFilePath, totalRows, partitions.size(), durationMs);
+                sanitizeForLog(tableName), sanitizeForLog(csvFilePath), totalRows,
+                partitions.size(), durationMs);
     }
 
     private static SwanFile.Partition buildPartition(List<ColumnSpec> schema, List<Object[]> rows) {
@@ -181,7 +183,7 @@ public final class StorageEngine {
                 lastScanStats = new ScanStats(0, 0, 0);
                 LOGGER.debug(
                         "table={} column={} comparison={} const={} partitionsTotal=0 partitionsRead=0 partitionsPruned=0 rowsOut=0 durationMs={}",
-                        tableName, columnName, comparison, safeConst, durationMs);
+                        sanitizeForLog(tableName), sanitizeForLog(columnName), comparison, safeConst, durationMs);
                 return out;
             }
 
@@ -203,17 +205,19 @@ public final class StorageEngine {
                 if (canPrune) {
                     pruned++;
                     LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                            tableName, columnName, comparison, safeConst, pe.index(),
-                            sum == null ? null : sum.min(),
-                            sum == null ? null : sum.max(),
+                            sanitizeForLog(tableName), sanitizeForLog(columnName), comparison,
+                            safeConst, pe.index(),
+                            sanitizeForLog(sum == null ? null : sum.min()),
+                            sanitizeForLog(sum == null ? null : sum.max()),
                             "PRUNED");
                     continue;
                 }
                 read++;
                 LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                        tableName, columnName, comparison, safeConst, pe.index(),
-                        sum == null ? null : sum.min(),
-                        sum == null ? null : sum.max(),
+                        sanitizeForLog(tableName), sanitizeForLog(columnName), comparison,
+                        safeConst, pe.index(),
+                        sanitizeForLog(sum == null ? null : sum.min()),
+                        sanitizeForLog(sum == null ? null : sum.max()),
                         "READ");
 
                 SwanFile.Partition part;
@@ -244,21 +248,29 @@ public final class StorageEngine {
             lastScanStats = new ScanStats(total, read, pruned);
             LOGGER.debug(
                     "table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
-                    tableName, columnName, comparison, safeConst, read, pruned, out.size(), durationMs);
+                    sanitizeForLog(tableName), sanitizeForLog(columnName), comparison, safeConst,
+                    read, pruned, out.size(), durationMs);
             return out;
         } catch (RuntimeException e) {
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug("table={} column={} comparison={} const={} error={} durationMs={}",
-                    tableName, columnName, comparison, safeConst, e.getClass().getSimpleName(), durationMs);
+                    sanitizeForLog(tableName), sanitizeForLog(columnName), comparison, safeConst,
+                    e.getClass().getSimpleName(), durationMs);
             throw e;
         }
     }
 
-    /** Replace commas in value's toString to keep log lines CSV-safe. */
+    /**
+     * Make a value safe for the comma-delimited CSV log line. Commas are
+     * replaced rather than escaped: an escape sequence such as {@code \,}
+     * still contains a comma, so it would still split the line into an extra
+     * value. Every field interpolated into a log message must pass through
+     * here, not just the predicate constant.
+     */
     private static String sanitizeForLog(Object value) {
         if (value == null)
             return "null";
-        return value.toString().replace(",", "\\,");
+        return value.toString().replace(',', ';');
     }
 
     /** Stats from the most recent {@link #select} call. */
