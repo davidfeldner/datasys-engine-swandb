@@ -50,6 +50,11 @@ public final class SqlParser {
         } catch (SqlParseException e) {
             LOGGER.error("failed line={} col={} durationMs={}", e.line(), e.column(), elapsedMs(start));
             throw e;
+        } catch (RuntimeException e) {
+            // A syntax error is the only failure a script can cause; anything
+            // else is a bug, but every call still gets its one log line.
+            LOGGER.error("failed error={} durationMs={}", e.getClass().getSimpleName(), elapsedMs(start));
+            throw e;
         }
     }
 

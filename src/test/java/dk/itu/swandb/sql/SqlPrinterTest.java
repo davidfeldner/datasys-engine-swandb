@@ -1,11 +1,18 @@
 package dk.itu.swandb.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import dk.itu.swandb.enums.Comparison;
+import dk.itu.swandb.sql.ast.CreateTableStatement;
+import dk.itu.swandb.sql.ast.Predicate;
+import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
 
 /**
@@ -43,6 +50,9 @@ class SqlPrinterTest {
         assertRoundTrips(one("SELECT * FROM trips WHERE distance > -1;"));
         assertRoundTrips(one("SELECT * FROM trips WHERE price > -1.5;"));
         assertRoundTrips(one("SELECT * FROM trips WHERE city = 'Copenhagen';"));
+        // Punctuation inside a literal is data, not syntax.
+        assertRoundTrips(one("SELECT * FROM trips WHERE city = 'New York; -- still one string';"));
+        assertRoundTrips(one("SELECT * FROM trips WHERE city = '';"));
     }
 
     @Test
@@ -86,6 +96,43 @@ class SqlPrinterTest {
         assertEquals("SELECT * FROM Trips WHERE distance > -1;COPY Trips FROM 'trips.csv';",
                 reprinted);
         assertEquals(statements, parser.parse(reprinted));
+    }
+
+    @Test
+    void aTableWithoutColumnsIsRefusedInsteadOfPrintedWrong() {
+        // The grammar demands at least one column, so 'CREATE TABLE x ();'
+        // would parse nowhere: better to refuse than to emit invalid SQL.
+        CreateTableStatement noColumns = new CreateTableStatement("empty", List.of());
+
+        IllegalArgumentException e =
+                assertThrows(IllegalArgumentException.class, () -> printer.print(noColumns));
+
+        assertTrue(e.getMessage().contains("at least one column"), e.getMessage());
+    }
+
+    @Test
+    void stringConstantsTheGrammarCannotReadBackAreRefused() {
+        // Escaped quotes are out of scope and a literal ends at the next quote
+        // on the same line, so these values have no spelling in the subset.
+        for (String value : List.of("it's", "two\nlines", "carriage\rreturn")) {
+            SelectStatement select = new SelectStatement("trips",
+                    Optional.of(new Predicate("city", Comparison.EQUALS, value)));
+
+            IllegalArgumentException e =
+                    assertThrows(IllegalArgumentException.class, () -> printer.print(select), value);
+
+            assertTrue(e.getMessage().contains("cannot print string constant"), e.getMessage());
+        }
+    }
+
+    @Test
+    void doublesThatAreNotFiniteAreRefused() {
+        for (double value : new double[]{Double.NaN, Double.POSITIVE_INFINITY}) {
+            SelectStatement select = new SelectStatement("trips",
+                    Optional.of(new Predicate("price", Comparison.LESS_THAN, value)));
+
+            assertThrows(IllegalArgumentException.class, () -> printer.print(select));
+        }
     }
 
     /** print(s) parses back to a statement equal to s. */

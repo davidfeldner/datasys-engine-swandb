@@ -90,6 +90,18 @@ Two traps in the double literal are worth knowing:
 Both renderings stay exact because `BigDecimal.valueOf` reads the shortest
 decimal that identifies the double, the same digits `Double.toString` uses.
 
+The printer never emits SQL it cannot read back. A `CREATE TABLE` without
+columns, a string constant carrying a quote or a line break, and a non-finite
+double have no spelling in this subset (escaped quotes are out of scope, and a
+literal ends at the next quote on the same line), so `print` throws
+`IllegalArgumentException` for them instead of producing text that fails to
+parse. None of these can come out of the parser — the grammar demands at least
+one column, and its `STRING_LITERAL` rule admits neither quotes nor line
+breaks — but the AST records are plain data, so a hand-built statement can
+still carry them. The binder keeps its own non-empty-column-list check, which
+is where the exercise puts it; that is why the record itself does not forbid
+the empty list.
+
 ## Running it
 
 ```bash

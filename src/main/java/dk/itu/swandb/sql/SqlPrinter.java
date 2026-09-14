@@ -30,6 +30,12 @@ public final class SqlPrinter {
     }
 
     private static String printCreateTable(CreateTableStatement s) {
+        // A table needs at least one column: 'CREATE TABLE x ();' is neither a
+        // statement the grammar accepts nor one DuckDB accepts, so refuse to
+        // emit it instead of printing SQL that cannot parse back.
+        if (s.columns().isEmpty())
+            throw new IllegalArgumentException(
+                    "cannot print CREATE TABLE " + s.tableName() + ": a table needs at least one column");
         StringJoiner columns = new StringJoiner(", ");
         for (ColumnSpec column : s.columns()) {
             columns.add(column.name() + " " + column.type().name());
@@ -38,7 +44,7 @@ public final class SqlPrinter {
     }
 
     private static String printCopy(CopyStatement s) {
-        return "COPY " + s.tableName() + " FROM '" + s.csvFilePath() + "';";
+        return "COPY " + s.tableName() + " FROM " + stringLiteral(s.csvFilePath()) + ";";
     }
 
     private static String printSelect(SelectStatement s) {
@@ -63,12 +69,25 @@ public final class SqlPrinter {
     private static String literal(Object constant) {
         return switch (constant) {
             case null -> throw new IllegalArgumentException("predicate constant must not be null");
-            case String str -> "'" + str + "'";
+            case String str -> stringLiteral(str);
             case Long value -> value.toString();
             case Double value -> doubleLiteral(value);
             default -> throw new IllegalArgumentException(
                     "cannot print constant of type " + constant.getClass().getName());
         };
+    }
+
+    /**
+     * A single-quoted literal that reads back as the same text. A literal ends
+     * at the next quote on the same line and escaped quotes are out of scope,
+     * so a value carrying a quote or a line break has no spelling in this
+     * subset and is refused rather than printed wrong.
+     */
+    private static String stringLiteral(String value) {
+        if (value.indexOf('\'') >= 0 || value.indexOf('\r') >= 0 || value.indexOf('\n') >= 0)
+            throw new IllegalArgumentException(
+                    "cannot print string constant containing a quote or line break: " + value);
+        return "'" + value + "'";
     }
 
     /**
