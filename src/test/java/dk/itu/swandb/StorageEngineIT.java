@@ -140,6 +140,62 @@ class StorageEngineIT {
     }
 
     @Test
+    void stringValuesPreserveWhitespace(@TempDir Path tmp) throws Exception {
+        StorageEngine engine = new StorageEngine(tmp);
+        engine.createTable("trips", TRIPS_SCHEMA);
+        Path csv = copyResource(tmp, "trips_spaces.csv");
+        engine.copyFile("trips", csv.toString());
+
+        // Row 0's city has a trailing space; it must survive the CSV read,
+        // the binary write, and the read back out, unchanged.
+        List<Object[]> all = engine.select("trips", "distance", Comparison.GREATER_THAN, -1L);
+        Object[][] expected = {
+                new Object[]{"Copenhagen ", 12L, 23.5},
+                new Object[]{"Aarhus", 187L, 301.0},
+                new Object[]{"Copenhagen", 88L, 99.99}
+        };
+        assertEquals(expected.length, all.size(), "row count");
+        for (int i = 0; i < expected.length; i++) {
+            assertEquals(expected[i][0], all.get(i)[0], "city mismatch at row " + i);
+            assertEquals(expected[i][1], all.get(i)[1], "distance mismatch at row " + i);
+            assertEquals(expected[i][2], all.get(i)[2], "price mismatch at row " + i);
+        }
+
+        // Equality must distinguish the padded value from the unpadded one.
+        List<Object[]> unpadded = engine.select("trips", "city", Comparison.EQUALS, "Copenhagen");
+        assertEquals(1, unpadded.size());
+        assertEquals("Copenhagen", unpadded.get(0)[0]);
+        assertEquals(88L, unpadded.get(0)[1]);
+        assertEquals(99.99, unpadded.get(0)[2]);
+
+        List<Object[]> padded = engine.select("trips", "city", Comparison.EQUALS, "Copenhagen ");
+        assertEquals(1, padded.size());
+        assertEquals("Copenhagen ", padded.get(0)[0]);
+        assertEquals(12L, padded.get(0)[1]);
+        assertEquals(23.5, padded.get(0)[2]);
+
+        // Ordering: "Copenhagen" < "Copenhagen " because the padded value is
+        // the longer string with an identical prefix.
+        List<Object[]> belowCopenhagen = engine.select("trips", "city",
+                Comparison.LESS_THAN, "Copenhagen");
+        assertEquals(1, belowCopenhagen.size());
+        assertEquals("Aarhus", belowCopenhagen.get(0)[0]);
+        assertEquals(187L, belowCopenhagen.get(0)[1]);
+        assertEquals(301.0, belowCopenhagen.get(0)[2]);
+
+        List<Object[]> aboveCopenhagen = engine.select("trips", "city",
+                Comparison.GREATER_THAN, "Copenhagen");
+        assertEquals(1, aboveCopenhagen.size());
+        assertEquals("Copenhagen ", aboveCopenhagen.get(0)[0]);
+        assertEquals(12L, aboveCopenhagen.get(0)[1]);
+        assertEquals(23.5, aboveCopenhagen.get(0)[2]);
+
+        // The persisted min/max must reflect the preserved value too.
+        Catalog.TableEntry table = new Catalog(tmp).getTable("trips");
+        verifyPartitionMinMax(table.partitions.get(0), "city", "Aarhus", "Copenhagen ");
+    }
+
+    @Test
     void emptyResult(@TempDir Path tmp) throws Exception {
         StorageEngine engine = new StorageEngine(tmp);
         engine.createTable("trips", TRIPS_SCHEMA);
