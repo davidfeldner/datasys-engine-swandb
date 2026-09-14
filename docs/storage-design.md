@@ -27,3 +27,6 @@ STRING as \[String length as uint16\]\[UTF-8 bytes\]; This means the max length 
 
 # Byte order
 We choose to go with Big-Endian as it is more intuitive for us to read bits left to right. We might have to incorporate a byte swap since our systems are little-endian.
+
+# I/O pruning implementation note
+The per-partition file offset described under "Partition size" is persisted as `offset` on every partition entry in `catalog.json`, filled in by `SwanFile.write`. `select` seeks straight to the offset of each partition that survives min/max pruning, so pruned partitions are never read or decoded. See `docs/io-pruning.md` for the bug this fixed and the tests that guard it.
