@@ -7,20 +7,20 @@ import java.util.List;
  * semantics of the column type (numeric for LONG/DOUBLE, lexicographic
  * ASCII for STRING).
  */
-public final class MinMax {
+final class MinMax {
 
     private MinMax() {
     }
 
     /** Result of a min/max computation; immutable. */
-    public record Result(Object min, Object max) {
+    record Result(Object min, Object max) {
     }
 
     /**
      * Compute the min and max of {@code values} for the given column type.
      * An empty input yields {@code null} for both fields.
      */
-    public static Result compute(ColumnType type, List<Object> values) {
+    static Result compute(ColumnType type, List<Object> values) {
         if (values == null || values.isEmpty()) {
             return new Result(null, null);
         }
@@ -36,7 +36,7 @@ public final class MinMax {
 
     /** Lexicographic/numeric comparison matching the column's data type. */
     @SuppressWarnings({"rawtypes", "unchecked"})
-    public static int compare(ColumnType type, Object a, Object b) {
+    static int compare(ColumnType type, Object a, Object b) {
         return switch (type) {
             case LONG -> Long.compare((Long) a, (Long) b);
             case DOUBLE -> Double.compare((Double) a, (Double) b);

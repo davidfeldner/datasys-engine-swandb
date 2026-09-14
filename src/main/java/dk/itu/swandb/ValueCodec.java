@@ -17,18 +17,18 @@ import java.util.List;
  * {@link ByteBuffer} already defaults to big-endian, so no explicit
  * byte-order swap is needed on the read path.
  */
-public final class ValueCodec {
+final class ValueCodec {
 
-    public static final int LONG_BYTES = 8;
-    public static final int DOUBLE_BYTES = 8;
-    public static final int STRING_LENGTH_BYTES = 2;
-    public static final int MAX_STRING_LENGTH = 0xFFFF; // 65535
+    static final int LONG_BYTES = 8;
+    static final int DOUBLE_BYTES = 8;
+    static final int STRING_LENGTH_BYTES = 2;
+    static final int MAX_STRING_LENGTH = 0xFFFF; // 65535
 
     private ValueCodec() {
     }
 
     /** Bytes a single value occupies when encoded. */
-    public static int encodedSize(ColumnType type, Object value) {
+    static int encodedSize(ColumnType type, Object value) {
         return switch (type) {
             case LONG -> LONG_BYTES;
             case DOUBLE -> DOUBLE_BYTES;
@@ -37,7 +37,7 @@ public final class ValueCodec {
     }
 
     /** Write a value into the buffer, advancing its position. */
-    public static void encode(ByteBuffer buf, ColumnType type, Object value) {
+    static void encode(ByteBuffer buf, ColumnType type, Object value) {
         switch (type) {
             case LONG -> buf.putLong((Long) value);
             case DOUBLE -> buf.putDouble((Double) value);
@@ -53,7 +53,7 @@ public final class ValueCodec {
     }
 
     /** Read a value from the buffer, advancing its position. */
-    public static Object decode(ByteBuffer buf, ColumnType type) {
+    static Object decode(ByteBuffer buf, ColumnType type) {
         return switch (type) {
             case LONG -> buf.getLong();
             case DOUBLE -> buf.getDouble();
@@ -67,7 +67,7 @@ public final class ValueCodec {
     }
 
     /** Encode a list of values for one column into its own byte array. */
-    public static byte[] encodeColumn(ColumnType type, List<Object> values) {
+    static byte[] encodeColumn(ColumnType type, List<Object> values) {
         int total = 0;
         for (Object v : values) {
             total += encodedSize(type, v);
@@ -80,7 +80,7 @@ public final class ValueCodec {
     }
 
     /** Decode a column byte array into its values, in order. */
-    public static List<Object> decodeColumn(ColumnType type, byte[] bytes) {
+    static List<Object> decodeColumn(ColumnType type, byte[] bytes) {
         ByteBuffer buf = ByteBuffer.wrap(bytes);
         List<Object> out = new ArrayList<>();
         while (buf.remaining() > 0) {

@@ -13,13 +13,13 @@ import java.util.List;
  * type the schema declares. Lines with the wrong field count, or values
  * that fail to parse to the declared type, fail the entire load.
  */
-public final class CsvParser {
+final class CsvParser {
 
     private CsvParser() {
     }
 
     /** Parse a single CSV line into typed values for the given schema. */
-    public static Object[] parseLine(String line, int lineNumber, String fileName,
+    static Object[] parseLine(String line, int lineNumber, String fileName,
                                      List<ColumnSpec> schema) {
         String[] fields = line.split(",", -1);
         if (fields.length != schema.size())
@@ -51,7 +51,7 @@ public final class CsvParser {
     }
 
     /** Read the whole CSV file into rows. */
-    public static List<Object[]> read(Path csvFile, List<ColumnSpec> schema)
+    static List<Object[]> read(Path csvFile, List<ColumnSpec> schema)
             throws IOException {
         List<Object[]> rows = new ArrayList<>();
         try (BufferedReader reader = Files.newBufferedReader(csvFile)) {

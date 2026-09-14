@@ -15,6 +15,10 @@ import org.slf4j.MDC;
  * The load step is skipped on subsequent runs when the {@code trips}
  * table already exists in the on-disk catalog, so the demo is
  * idempotent. Delete {@code engine-data/} to force a reload.
+ *
+ * The MDC session context is cleared on exit so it cannot leak onto the
+ * calling thread; {@link StorageEngine} re-establishes a default context
+ * for any later direct API use.
  */
 public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
@@ -23,7 +27,15 @@ public final class Engine {
         MDC.put("sessionId", UUID.randomUUID().toString());
         MDC.put("statementNumber", "0");
         LOGGER.debug("engine started");
+        try {
+            runDemo();
+        } finally {
+            LOGGER.debug("engine stopped");
+            MDC.clear();
+        }
+    }
 
+    private static void runDemo() {
         Path dataDir = Path.of("engine-data");
         StorageEngine engine = new StorageEngine(dataDir);
 
@@ -59,7 +71,5 @@ public final class Engine {
         for (Object[] row : byPrice) {
             System.out.println("  " + row[0] + " " + row[1] + " " + row[2]);
         }
-
-        LOGGER.debug("engine stopped");
     }
 }

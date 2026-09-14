@@ -6,7 +6,7 @@ package dk.itu.swandb;
  * avoid touching partitions whose values are entirely outside the
  * predicate range.
  */
-public final class Pruning {
+final class Pruning {
 
     private Pruning() {
     }
@@ -15,7 +15,7 @@ public final class Pruning {
      * @return {@code true} if the partition may be safely skipped,
      *         {@code false} if it must be read.
      */
-    public static boolean canPrune(Comparison comparison, Object constant,
+    static boolean canPrune(Comparison comparison, Object constant,
                                    Object min, Object max, ColumnType type) {
         if (min == null || max == null)
             // Empty partition; reading it is safe but never yields rows.

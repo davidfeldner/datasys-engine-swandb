@@ -17,10 +17,10 @@ import java.util.Map;
  * for every column. The catalog is the single source of truth for pruning
  * — no per-data-file footer or header is consulted.
  */
-public final class Catalog {
+final class Catalog {
 
     /** JSON file name inside the data directory. */
-    public static final String CATALOG_FILE = "catalog.json";
+    static final String CATALOG_FILE = "catalog.json";
 
     private static final ObjectMapper MAPPER =
             new ObjectMapper()
@@ -101,7 +101,7 @@ public final class Catalog {
     private final Path file;
     private Document doc;
 
-    public Catalog(Path dataDir) {
+    Catalog(Path dataDir) {
         this.dataDir = dataDir;
         this.file = dataDir.resolve(CATALOG_FILE);
         load();
@@ -117,7 +117,7 @@ public final class Catalog {
     }
 
     /** Persist the in-memory document to disk. */
-    public synchronized void save() {
+    synchronized void save() {
         try {
             Files.createDirectories(dataDir);
             MAPPER.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), doc);
@@ -126,17 +126,17 @@ public final class Catalog {
         }
     }
 
-    public boolean hasTable(String tableName) {
+    boolean hasTable(String tableName) {
         return doc.tables.containsKey(tableName);
     }
 
-    public TableEntry getTable(String tableName) {
+    TableEntry getTable(String tableName) {
         TableEntry t = doc.tables.get(tableName);
         if (t == null) throw new IllegalArgumentException("unknown table: " + tableName);
         return t;
     }
 
-    public void addTable(TableEntry entry) {
+    void addTable(TableEntry entry) {
         doc.tables.put(entry.name, entry);
     }
 }

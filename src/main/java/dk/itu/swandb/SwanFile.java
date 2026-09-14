@@ -30,17 +30,17 @@ import java.util.List;
  * encoded values, which is convenient for the per-column min/max the
  * writer computes during ingestion.
  */
-public final class SwanFile {
+final class SwanFile {
 
-    public static final byte[] MAGIC = {'S', 'W', 'A', 'N', 'D', 'B'};
-    public static final byte VERSION = 1;
-    public static final int RESERVED_BYTES = 16;
-    public static final int HEADER_BYTES = MAGIC.length + 1 + RESERVED_BYTES;
+    static final byte[] MAGIC = {'S', 'W', 'A', 'N', 'D', 'B'};
+    static final byte VERSION = 1;
+    static final int RESERVED_BYTES = 16;
+    static final int HEADER_BYTES = MAGIC.length + 1 + RESERVED_BYTES;
 
-    public static final String EXTENSION = ".swan";
+    static final String EXTENSION = ".swan";
 
     /** One partition's worth of rows, kept as parallel arrays per column. */
-    public static final class Partition {
+    static final class Partition {
         public final int rowCount;
         public final List<List<Object>> columnValues; // one list per column
 
@@ -54,7 +54,7 @@ public final class SwanFile {
     }
 
     /** Write the file from scratch; overwrites any existing file. */
-    public static void write(Path path, List<ColumnSpec> schema, List<Partition> partitions)
+    static void write(Path path, List<ColumnSpec> schema, List<Partition> partitions)
             throws IOException {
         try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "rw");
              FileChannel channel = raf.getChannel()) {
@@ -105,7 +105,7 @@ public final class SwanFile {
     }
 
     /** Read all partitions from a file, returning them in on-disk order. */
-    public static List<Partition> readAll(Path path, List<ColumnSpec> schema)
+    static List<Partition> readAll(Path path, List<ColumnSpec> schema)
             throws IOException {
         try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "r");
              FileChannel channel = raf.getChannel()) {
