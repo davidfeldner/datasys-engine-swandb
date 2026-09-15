@@ -12,9 +12,16 @@
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <log4j.version>2.26.1</log4j.version>
+    <antlr.version>4.13.2</antlr.version>
   </properties>
   
   <dependencies>
+    <!-- SQL front end: runtime only; the parser itself is generated at build time -->
+    <dependency>
+      <groupId>org.antlr</groupId>
+      <artifactId>antlr4-runtime</artifactId>
+      <version>${antlr.version}</version>
+    </dependency>
     <!-- Logging API: your code compiles only against SLF4J -->
     <dependency>
       <groupId>org.slf4j</groupId>
@@ -51,6 +58,23 @@
 
   <build>
     <plugins>
+      <!-- Generates the lexer, parser and visitor from Sql.g4 into
+           target/generated-sources/antlr4, which joins the compile path
+           automatically. The package of the generated classes comes from
+           the grammar's directory below src/main/antlr4. Never committed. -->
+      <plugin>
+        <groupId>org.antlr</groupId>
+        <artifactId>antlr4-maven-plugin</artifactId>
+        <version>${antlr.version}</version>
+        <configuration>
+          <visitor>true</visitor>
+        </configuration>
+        <executions>
+          <execution>
+            <goals><goal>antlr4</goal></goals>
+          </execution>
+        </executions>
+      </plugin>
       <!-- Compiles with the Java release set above. Pinned because the version
            Maven picks by default is too old to understand `maven.compiler.release`. -->
       <plugin>
