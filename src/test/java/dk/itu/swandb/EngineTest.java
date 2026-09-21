@@ -1,40 +1,51 @@
 package dk.itu.swandb;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
+import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
- * The demo is this week's runnable evidence: started with no arguments, it
- * must print the pretty-printed form of the four Exercise 3 Task 1
- * statements, one statement per line, and execute nothing.
+ * The front door with no arguments is not a query mode: it prints the team
+ * name and how to use the engine, and produces no CSV.
  */
 class EngineTest {
 
     @Test
-    void demoPrintsTheFourTask1Statements() {
-        assertEquals(List.of(
-                "CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);",
-                "COPY trips FROM 'trips.csv';",
-                "SELECT * FROM trips WHERE distance > 100;",
-                "SELECT * FROM trips;"),
-                demoOutputLines());
+    void noArgumentsPrintsTeamNameAndUsage(@TempDir Path tmp) {
+        Capture capture = run(new String[0], tmp);
+
+        assertEquals(0, capture.exitCode());
+        assertTrue(capture.stdout().contains(Engine.TEAM_NAME),
+                "stdout should name the team: " + capture.stdout());
+        assertTrue(capture.stdout().contains("usage"), capture.stdout());
+        assertTrue(capture.stdout().contains("-f"), capture.stdout());
+        assertEquals("", capture.stderr());
     }
 
-    private static List<String> demoOutputLines() {
+    private static Capture run(String[] args, Path dataDir) {
         PrintStream originalOut = System.out;
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
         try {
-            System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
-            Engine.main(new String[0]);
+            System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
+            System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
+            int exitCode = Engine.run(args, dataDir);
+            return new Capture(exitCode, out.toString(StandardCharsets.UTF_8),
+                    err.toString(StandardCharsets.UTF_8));
         } finally {
             System.setOut(originalOut);
+            System.setErr(originalErr);
         }
-        return captured.toString(StandardCharsets.UTF_8).lines().toList();
+    }
+
+    private record Capture(int exitCode, String stdout, String stderr) {
     }
 }
