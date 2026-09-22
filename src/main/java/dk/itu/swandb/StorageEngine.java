@@ -3,8 +3,11 @@ package dk.itu.swandb;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.enums.Comparison;
+import dk.itu.swandb.plan.Operator;
+import dk.itu.swandb.plan.Plan;
+import dk.itu.swandb.plan.Planner;
+import dk.itu.swandb.plan.Selection;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -12,6 +15,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -71,12 +75,12 @@ public final class StorageEngine {
             List<ColumnSpec> columns = List.copyOf(table.columns);
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug("table={} columns={} durationMs={}",
-                    sanitizeForLog(tableName), columns.size(), durationMs);
+                    LogFormat.sanitize(tableName), columns.size(), durationMs);
             return columns;
         } catch (RuntimeException e) {
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug("table={} error={} durationMs={}",
-                    sanitizeForLog(tableName), e.getClass().getSimpleName(), durationMs);
+                    LogFormat.sanitize(tableName), e.getClass().getSimpleName(), durationMs);
             throw e;
         }
     }
@@ -102,7 +106,7 @@ public final class StorageEngine {
 
         long durationMs = (System.nanoTime() - start) / 1_000_000L;
         LOGGER.debug("table={} columns={} durationMs={}",
-                sanitizeForLog(tableName), columns.size(), durationMs);
+                LogFormat.sanitize(tableName), columns.size(), durationMs);
     }
 
     /** Load a CSV file into the binary store, splitting into partitions. */
@@ -138,8 +142,8 @@ public final class StorageEngine {
                 MinMax.Result mm = MinMax.compute(spec.type(), part.columnValues.get(c));
                 summaries.add(new Catalog.ColumnSummary(spec.name(), spec.type(), mm.min(), mm.max()));
                 LOGGER.debug("table={} partition={} column={} min={} max={}",
-                        sanitizeForLog(tableName), partitionIndex, sanitizeForLog(spec.name()),
-                        sanitizeForLog(mm.min()), sanitizeForLog(mm.max()));
+                        LogFormat.sanitize(tableName), partitionIndex, LogFormat.sanitize(spec.name()),
+                        LogFormat.sanitize(mm.min()), LogFormat.sanitize(mm.max()));
             }
             partEntries.add(new Catalog.PartitionEntry(partitionIndex, end - offset, summaries));
         }
@@ -159,7 +163,7 @@ public final class StorageEngine {
 
         long durationMs = (System.nanoTime() - start) / 1_000_000L;
         LOGGER.debug("table={} file={} rows={} partitions={} durationMs={}",
-                sanitizeForLog(tableName), sanitizeForLog(csvFilePath), totalRows,
+                LogFormat.sanitize(tableName), LogFormat.sanitize(csvFilePath), totalRows,
                 partitions.size(), durationMs);
     }
 
@@ -175,150 +179,82 @@ public final class StorageEngine {
         return new SwanFile.Partition(rows.size(), cols);
     }
 
-    /** Filtered scan over the binary store. */
+    /**
+     * Filtered scan over the binary store. The week 2 signature is
+     * unchanged; internally it plans a {@code Filter(Scan)} pipeline and
+     * drains it. Planning is where pruning happens, using catalog min/max
+     * summaries only.
+     */
     public List<Object[]> select(String tableName, String columnName,
             Comparison comparison, Object constant) {
         long start = System.nanoTime();
-        String safeConst = sanitizeForLog(constant);
+        String safeConst = LogFormat.sanitize(constant);
         try {
-            Catalog.TableEntry table = catalog.getTable(tableName);
-
-            int columnIndex = -1;
-            ColumnSpec filterCol = null;
-            for (int i = 0; i < table.columns.size(); i++) {
-                if (table.columns.get(i).name().equals(columnName)) {
-                    columnIndex = i;
-                    filterCol = table.columns.get(i);
-                    break;
-                }
-            }
-            if (filterCol == null)
-                throw new IllegalArgumentException("unknown column: " + columnName);
-            validateConstant(filterCol, constant);
-
-            List<Object[]> out = new ArrayList<>();
-            int total = table.partitions.size();
-            int pruned = 0;
-            int read = 0;
-
-            if (total == 0) {
-                long durationMs = (System.nanoTime() - start) / 1_000_000L;
-                lastScanStats = new ScanStats(0, 0, 0);
-                LOGGER.debug(
-                        "table={} column={} comparison={} const={} partitionsTotal=0 partitionsRead=0 partitionsPruned=0 rowsOut=0 durationMs={}",
-                        sanitizeForLog(tableName), sanitizeForLog(columnName), comparison, safeConst, durationMs);
-                return out;
-            }
-
-            Path dataPath = dataDir.resolve(table.dataFile);
-
-            for (Catalog.PartitionEntry pe : table.partitions) {
-                Catalog.ColumnSummary sum = null;
-                for (Catalog.ColumnSummary s : pe.columns) {
-                    if (s.name().equals(columnName)) {
-                        sum = s;
-                        break;
-                    }
-                }
-                // Filter by catalog min/max first; only hit disk when we must.
-                boolean canPrune = Pruning.canPrune(comparison, constant,
-                        sum == null ? null : sum.min(),
-                        sum == null ? null : sum.max(),
-                        filterCol.type());
-                if (canPrune) {
-                    pruned++;
-                    LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                            sanitizeForLog(tableName), sanitizeForLog(columnName), comparison,
-                            safeConst, pe.index(),
-                            sanitizeForLog(sum == null ? null : sum.min()),
-                            sanitizeForLog(sum == null ? null : sum.max()),
-                            "PRUNED");
-                    continue;
-                }
-                read++;
-                LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                        sanitizeForLog(tableName), sanitizeForLog(columnName), comparison,
-                        safeConst, pe.index(),
-                        sanitizeForLog(sum == null ? null : sum.min()),
-                        sanitizeForLog(sum == null ? null : sum.max()),
-                        "READ");
-
-                SwanFile.Partition part;
-                try {
-                    long partitionOffset = pe.offset();
-                    // Seek straight to the live partition; pruned partitions are never touched.
-                    // Fallback for catalogs written before offsets were tracked.
-                    if (partitionOffset < 0) part = SwanFile.readAll(dataPath, table.columns).get(pe.index());
-                    else part = SwanFile.readPartition(dataPath, table.columns, partitionOffset);
-                } catch (IOException e) {
-                    throw new IllegalStateException("failed to read " + dataPath, e);
-                }
-
-                List<Object> filterValues = part.columnValues.get(columnIndex);
-                for (int r = 0; r < part.rowCount; r++) {
-                    Object v = filterValues.get(r);
-                    if (matches(comparison, filterCol.type(), constant, v)) {
-                        Object[] row = new Object[table.columns.size()];
-                        for (int c = 0; c < table.columns.size(); c++) {
-                            row[c] = part.columnValues.get(c).get(r);
-                        }
-                        out.add(row);
-                    }
-                }
-            }
+            Selection selection = new Selection(columnName, comparison, constant);
+            Plan plan = new Planner(catalog, dataDir).plan(tableName, Optional.of(selection));
+            List<Object[]> out = drain(plan.root());
+            lastScanStats = plan.stats();
 
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
-            lastScanStats = new ScanStats(total, read, pruned);
             LOGGER.debug(
                     "table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
-                    sanitizeForLog(tableName), sanitizeForLog(columnName), comparison, safeConst,
-                    read, pruned, out.size(), durationMs);
+                    LogFormat.sanitize(tableName), LogFormat.sanitize(columnName), comparison, safeConst,
+                    plan.stats().partitionsRead(), plan.stats().partitionsPruned(),
+                    out.size(), durationMs);
             return out;
         } catch (RuntimeException e) {
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug("table={} column={} comparison={} const={} error={} durationMs={}",
-                    sanitizeForLog(tableName), sanitizeForLog(columnName), comparison, safeConst,
+                    LogFormat.sanitize(tableName), LogFormat.sanitize(columnName), comparison, safeConst,
                     e.getClass().getSimpleName(), durationMs);
             throw e;
         }
     }
 
     /**
-     * Make a value safe for the comma-delimited CSV log line. Commas are
-     * replaced rather than escaped: an escape sequence such as {@code \,}
-     * still contains a comma, so it would still split the line into an extra
-     * value. Every field interpolated into a log message must pass through
-     * here, not just the predicate constant.
+     * Unfiltered scan over the binary store: every partition survives and
+     * the plan is a bare {@link dk.itu.swandb.plan.ScanOperator}.
      */
-    private static String sanitizeForLog(Object value) {
-        if (value == null)
-            return "null";
-        return value.toString().replace(',', ';');
+    public List<Object[]> selectAll(String tableName) {
+        long start = System.nanoTime();
+        try {
+            Plan plan = new Planner(catalog, dataDir).plan(tableName, Optional.empty());
+            List<Object[]> out = drain(plan.root());
+            lastScanStats = plan.stats();
+
+            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            LOGGER.debug(
+                    "table={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
+                    LogFormat.sanitize(tableName), plan.stats().partitionsRead(),
+                    plan.stats().partitionsPruned(), out.size(), durationMs);
+            return out;
+        } catch (RuntimeException e) {
+            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            LOGGER.debug("table={} error={} durationMs={}",
+                    LogFormat.sanitize(tableName), e.getClass().getSimpleName(), durationMs);
+            throw e;
+        }
     }
 
-    /** Stats from the most recent {@link #select} call. */
+    /** Drains an operator tree, always closing what it opened. */
+    private static List<Object[]> drain(Operator root) {
+        List<Object[]> out = new ArrayList<>();
+        root.open();
+        try {
+            Object[] row;
+            while ((row = root.next()) != null) {
+                out.add(row);
+            }
+        } finally {
+            root.close();
+        }
+        return out;
+    }
+
+    /** Stats from the most recent {@link #select} or {@link #selectAll} call. */
     public ScanStats lastScanStats() {
         if (lastScanStats == null)
             throw new IllegalStateException("no select has been executed yet");
         return lastScanStats;
-    }
-
-    private static void validateConstant(ColumnSpec col, Object constant) {
-        if (constant == null)
-            throw new IllegalArgumentException("constant must not be null");
-        if (!col.type().accepts(constant))
-            throw new IllegalArgumentException(
-                    "constant type mismatch for column " + col.name()
-                            + ": expected " + col.type() + " got " + constant.getClass().getSimpleName());
-    }
-
-    private static boolean matches(Comparison comparison, ColumnType type,
-            Object constant, Object value) {
-        int cmp = MinMax.compare(type, constant, value);
-        return switch (comparison) {
-            case EQUALS -> cmp == 0;
-            case LESS_THAN -> cmp > 0;
-            case GREATER_THAN -> cmp < 0;
-        };
     }
 }

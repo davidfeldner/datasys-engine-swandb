@@ -8,6 +8,7 @@ logs
 .settings/
 
 engine-data/
+data/
 .sdkmanrc
 .bloop
 .DS_Store

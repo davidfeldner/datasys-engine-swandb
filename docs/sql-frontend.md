@@ -104,10 +104,20 @@ the empty list.
 
 ## Running it
 
+Exercise 4 replaced the parse-only demo with the SQL front door, so
+`mvn compile exec:java` with no arguments now prints the team name and usage
+instead of the four pretty-printed statements. `SqlPrinter` itself is
+unchanged and still covered by its round-trip tests.
+
 ```bash
-mvn compile exec:java   # prints the four Task 1 statements, one per line
-mvn -B verify           # unit tests (Surefire) and integration tests (Failsafe)
+mvn compile exec:java                                            # usage
+mvn -q compile exec:java -Dexec.args="'SELECT * FROM trips'"      # one statement
+mvn -q compile exec:java -Dexec.args="-f q.sql"                   # a whole script
+mvn -B verify                                                     # unit + integration tests
 ```
+
+SELECT rows go to stdout as headerless CSV; the console log and errors go to
+stderr. See `docs/volcano-pipeline.md` for how a bound statement runs.
 
 ## Logging
 
