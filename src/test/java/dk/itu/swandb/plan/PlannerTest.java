@@ -3,6 +3,7 @@ package dk.itu.swandb.plan;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.InputStream;
@@ -98,13 +99,43 @@ class PlannerTest {
         assertEquals(8, drain(plan.root()).size());
     }
 
+    @Test
+    void aMissingSummaryIsAnErrorInsteadOfASilentPrune(@TempDir Path tmp) throws Exception {
+        Path dataDir = tmp.resolve("data");
+        Catalog catalog = sortedTripsCatalog(tmp);
+        // Corrupt the catalog: partition 0 no longer carries any summaries.
+        catalog.getTable("trips").partitions.get(0).columns.clear();
+        Planner planner = new Planner(catalog, dataDir);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> planner.plan("trips",
+                Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L))));
+        assertTrue(e.getMessage().contains("missing min/max summary"), e.getMessage());
+    }
+
+    @Test
+    void aNullBoundIsAnErrorInsteadOfASilentPrune(@TempDir Path tmp) throws Exception {
+        Path dataDir = tmp.resolve("data");
+        Catalog catalog = sortedTripsCatalog(tmp);
+        // Column 1 is distance; wipe only its lower bound.
+        catalog.getTable("trips").partitions.get(0).columns.get(1).min = null;
+        Planner planner = new Planner(catalog, dataDir);
+
+        assertThrows(IllegalStateException.class, () -> planner.plan("trips",
+                Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L))));
+    }
+
     private static Planner plannerOverSortedTrips(Path tmp) throws Exception {
+        Path dataDir = tmp.resolve("data");
+        return new Planner(sortedTripsCatalog(tmp), dataDir);
+    }
+
+    private static Catalog sortedTripsCatalog(Path tmp) throws Exception {
         Path dataDir = tmp.resolve("data");
         StorageEngine engine = new StorageEngine(dataDir, 2);
         engine.createTable("trips", TRIPS_SCHEMA);
         Path csv = copyResource(tmp, "trips_sorted_by_distance.csv");
         engine.copyFile("trips", csv.toString());
-        return new Planner(new Catalog(dataDir), dataDir);
+        return new Catalog(dataDir);
     }
 
     private static Path copyResource(Path tmp, String resourceName) throws Exception {

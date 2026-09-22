@@ -86,8 +86,15 @@ public final class Planner {
         int pruned = 0;
         for (Catalog.PartitionEntry partition : table.partitions) {
             Catalog.ColumnSummary summary = summary(partition, selection.columnName());
-            Object min = summary == null ? null : summary.min();
-            Object max = summary == null ? null : summary.max();
+            // Never prune on missing metadata: a partition that is never read
+            // can never be recovered by the filter below, so an incomplete
+            // catalog would silently drop matching rows. Fail loudly instead.
+            if (summary == null || summary.min() == null || summary.max() == null)
+                throw new IllegalStateException("missing min/max summary for column "
+                        + selection.columnName() + " in partition " + partition.index()
+                        + " of table " + table.name + "; refusing to prune on incomplete catalog metadata");
+            Object min = summary.min();
+            Object max = summary.max();
             boolean canPrune = Pruning.canPrune(selection.comparison(), selection.constant(),
                     min, max, filterColumn.type());
             LOGGER.debug(

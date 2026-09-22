@@ -1,6 +1,7 @@
 package dk.itu.swandb;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -58,7 +59,14 @@ class PruningTest {
     }
 
     @Test
-    void emptyPartitionIsPruned() {
-        assertTrue(Pruning.canPrune(Comparison.GREATER_THAN, 10L, null, null, ColumnType.LONG));
+    void missingBoundsAreRejected() {
+        // Without a min/max summary the partition cannot be proven outside the
+        // predicate range, so pruning it would silently drop rows: error out.
+        assertThrows(IllegalArgumentException.class,
+                () -> Pruning.canPrune(Comparison.GREATER_THAN, 10L, null, null, ColumnType.LONG));
+        assertThrows(IllegalArgumentException.class,
+                () -> Pruning.canPrune(Comparison.GREATER_THAN, 10L, null, 31L, ColumnType.LONG));
+        assertThrows(IllegalArgumentException.class,
+                () -> Pruning.canPrune(Comparison.GREATER_THAN, 10L, 12L, null, ColumnType.LONG));
     }
 }

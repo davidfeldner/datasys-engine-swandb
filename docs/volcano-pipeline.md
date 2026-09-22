@@ -31,6 +31,12 @@ match. The survivors become `ScanOperator`; a present predicate wraps that
 scan in a `FilterOperator`. Without a `WHERE`, the plan is a bare
 `ScanOperator` over every partition.
 
+A partition whose summary is missing, or whose min/max is absent, is never
+pruned: `Planner` raises an error and `Pruning.canPrune` rejects null
+bounds. A partition the filter never reads cannot be recovered, so an
+incomplete catalog would silently drop matching rows; failing loudly is the
+only safe outcome.
+
 `StorageEngine.select(table, column, comparison, constant)` keeps its exact
 week 2 signature and now plans and drains that pipeline internally;
 `StorageEngine.selectAll(table)` is the unfiltered sibling the front door

@@ -90,10 +90,21 @@ public final class Engine {
 
     /** The SQL to run, or {@code null} when the arguments name no valid mode. */
     private static String scriptText(String[] args) throws IOException {
-        if (args.length == 1)
+        if (args.length == 1) {
+            // A bare "-f" names no script; show usage instead of handing "-f;"
+            // to the parser as if it were SQL.
+            if ("-f".equals(args[0].trim()))
+                return null;
             return terminate(args[0]);
-        if (args.length == 2 && "-f".equals(args[0]))
-            return Files.readString(Path.of(args[1]));
+        }
+        if (args.length == 2 && "-f".equals(args[0])) {
+            Path script = Path.of(args[1]);
+            // Otherwise a missing file surfaces as a bare path, the whole
+            // message of NoSuchFileException, which explains nothing.
+            if (!Files.isRegularFile(script))
+                throw new IllegalArgumentException("cannot read SQL script: " + args[1]);
+            return Files.readString(script);
+        }
         return null;
     }
 
