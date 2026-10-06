@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Runs the packaged engine: ./engine -c "SELECT ..." or ./engine -f script.sql
+# ENGINE_JAVA_OPTS passes JVM flags through, e.g. ENGINE_JAVA_OPTS=-Xmx64m.
+# Build the JAR first with `mvn package`, which writes target/engine.jar.
+exec java $ENGINE_JAVA_OPTS -jar "$(dirname "$0")/target/engine.jar" "$@"

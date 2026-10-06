@@ -17,8 +17,8 @@ import dk.itu.swandb.sql.Executor;
  *
  * <ul>
  *   <li>no arguments — print the team name and usage;</li>
- *   <li>one argument — run that single SQL statement
- *       ({@code -Dexec.args="'SELECT * FROM trips'"});</li>
+ *   <li>{@code -c "<sql>"} — run that single SQL statement (a bare
+ *       {@code "<sql>"} argument is accepted as shorthand);</li>
  *   <li>{@code -f <script.sql>} — run a whole script.</li>
  * </ul>
  *
@@ -36,6 +36,15 @@ public final class Engine {
 
     /** Data directory used by {@link #main}; {@link #run} takes an override. */
     static final Path DEFAULT_DATA_DIR = Path.of("data");
+
+    /**
+     * System property that sets the partition row cap for tables this process
+     * creates, overriding {@link StorageEngine#DEFAULT_MAX_ROWS_PER_PARTITION}.
+     * The experiment design ({@code docs/experiment-design.md}) sweeps it
+     * through {@code ENGINE_JAVA_OPTS}; the cap is captured into the catalog
+     * at {@code CREATE TABLE} time and used by the following {@code COPY}.
+     */
+    static final String MAX_ROWS_PER_PARTITION_PROPERTY = "engine.maxRowsPerPartition";
 
     private Engine() {
     }
@@ -69,7 +78,7 @@ public final class Engine {
                 return 2;
             }
 
-            StorageEngine engine = new StorageEngine(dataDir);
+            StorageEngine engine = new StorageEngine(dataDir, maxRowsPerPartition());
             new Executor(engine).executeScript(sql,
                     rows -> CsvWriter.writeRows(System.out, rows));
             return 0;
@@ -91,12 +100,15 @@ public final class Engine {
     /** The SQL to run, or {@code null} when the arguments name no valid mode. */
     private static String scriptText(String[] args) throws IOException {
         if (args.length == 1) {
-            // A bare "-f" names no script; show usage instead of handing "-f;"
-            // to the parser as if it were SQL.
-            if ("-f".equals(args[0].trim()))
+            // A bare "-f" or "-c" names no script; show usage instead of
+            // handing "-f;" to the parser as if it were SQL.
+            String arg = args[0].trim();
+            if ("-f".equals(arg) || "-c".equals(arg))
                 return null;
             return terminate(args[0]);
         }
+        if (args.length == 2 && "-c".equals(args[0]))
+            return terminate(args[1]);
         if (args.length == 2 && "-f".equals(args[0])) {
             Path script = Path.of(args[1]);
             // Otherwise a missing file surfaces as a bare path, the whole
@@ -121,11 +133,32 @@ public final class Engine {
     private static void printUsage(PrintStream out) {
         out.println(TEAM_NAME + " — How to Build Data Systems, Fall 2026");
         out.println("usage:");
-        out.println("  mvn exec:java                            print this message");
-        out.println("  mvn exec:java -Dexec.args=\"'<sql>'\"      run one SQL statement");
-        out.println("  mvn exec:java -Dexec.args=\"-f <file>\"    run a .sql script");
+        out.println("  ./engine                             print this message");
+        out.println("  ./engine -c \"<sql>\"                   run one SQL statement");
+        out.println("  ./engine -f <file>                   run a .sql script");
         out.println();
+        out.println("A bare \"<sql>\" argument is accepted as shorthand for -c.");
+        out.println("ENGINE_JAVA_OPTS=\"-Dengine.maxRowsPerPartition=<n>\" sets the");
+        out.println("partition row cap of tables created by that run.");
         out.println("SELECT rows are written to stdout as headerless CSV; logs go to stderr.");
+    }
+
+    /** The partition cap for new tables: the system property, or the default. */
+    private static int maxRowsPerPartition() {
+        String raw = System.getProperty(MAX_ROWS_PER_PARTITION_PROPERTY);
+        if (raw == null || raw.isBlank())
+            return StorageEngine.DEFAULT_MAX_ROWS_PER_PARTITION;
+        int value;
+        try {
+            value = Integer.parseInt(raw.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "invalid " + MAX_ROWS_PER_PARTITION_PROPERTY + ": " + raw, e);
+        }
+        if (value <= 0)
+            throw new IllegalArgumentException(
+                    MAX_ROWS_PER_PARTITION_PROPERTY + " must be > 0: " + raw);
+        return value;
     }
 
     private static long elapsedMs(long startNanos) {
