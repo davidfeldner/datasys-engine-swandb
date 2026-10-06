@@ -80,11 +80,6 @@ public final class Executor {
         }
     }
 
-    /** The current statement number; exposed for tests. */
-    public int statementNumber() {
-        return statementNumber;
-    }
-
     private List<Object[]> run(Statement statement) {
         return switch (statement) {
             case CreateTableStatement createTable -> {

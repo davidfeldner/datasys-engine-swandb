@@ -37,19 +37,6 @@ public final class FilterOperator implements Operator {
         this.constant = constant;
     }
 
-    /** The operator this filter pulls from. */
-    public Operator child() {
-        return child;
-    }
-
-    public long rowsIn() {
-        return rowsIn;
-    }
-
-    public long rowsOut() {
-        return rowsOut;
-    }
-
     @Override
     public void open() {
         rowsIn = 0;

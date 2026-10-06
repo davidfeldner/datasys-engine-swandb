@@ -34,7 +34,6 @@ public final class StorageEngine {
     private final Path dataDir;
     private final int maxRowsPerPartition;
     private final Catalog catalog;
-    private ScanStats lastScanStats;
 
     /** Open (or create) an engine rooted at {@code dataDirectory}. */
     public StorageEngine(Path dataDirectory) {
@@ -56,10 +55,6 @@ public final class StorageEngine {
             throw new IllegalStateException("cannot create data dir " + dataDir, e);
         }
         this.catalog = new Catalog(dataDir);
-    }
-
-    public int maxRowsPerPartition() {
-        return maxRowsPerPartition;
     }
 
     /**
@@ -193,7 +188,6 @@ public final class StorageEngine {
             Selection selection = new Selection(columnName, comparison, constant);
             Plan plan = new Planner(catalog, dataDir).plan(tableName, Optional.of(selection));
             List<Object[]> out = drain(plan.root());
-            lastScanStats = plan.stats();
 
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug(
@@ -220,7 +214,6 @@ public final class StorageEngine {
         try {
             Plan plan = new Planner(catalog, dataDir).plan(tableName, Optional.empty());
             List<Object[]> out = drain(plan.root());
-            lastScanStats = plan.stats();
 
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug(
@@ -249,12 +242,5 @@ public final class StorageEngine {
             root.close();
         }
         return out;
-    }
-
-    /** Stats from the most recent {@link #select} or {@link #selectAll} call. */
-    public ScanStats lastScanStats() {
-        if (lastScanStats == null)
-            throw new IllegalStateException("no select has been executed yet");
-        return lastScanStats;
     }
 }

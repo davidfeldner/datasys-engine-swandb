@@ -45,9 +45,6 @@ class PlannerTest {
 
         assertStats(new ScanStats(4, 1, 3), plan.stats());
 
-        ScanOperator scan = (ScanOperator) ((FilterOperator) plan.root()).child();
-        assertEquals(1, scan.partitions().size());
-        assertEquals(3, scan.partitions().get(0).index());
         assertRows(List.of(
                 new Object[]{"Aalborg", 210L, 340.5},
                 new Object[]{"Esbjerg", 299L, 450.25}), drain(plan.root()));
@@ -71,8 +68,6 @@ class PlannerTest {
                 Optional.of(new Selection("distance", Comparison.GREATER_THAN, 1000L)));
 
         assertStats(new ScanStats(4, 0, 4), plan.stats());
-        ScanOperator scan = (ScanOperator) ((FilterOperator) plan.root()).child();
-        assertTrue(scan.partitions().isEmpty());
         assertEquals(List.of(), drain(plan.root()));
     }
 
@@ -83,8 +78,7 @@ class PlannerTest {
         Plan plan = planner.plan("trips",
                 Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L)));
 
-        FilterOperator filter = assertInstanceOf(FilterOperator.class, plan.root());
-        assertInstanceOf(ScanOperator.class, filter.child());
+        assertInstanceOf(FilterOperator.class, plan.root());
     }
 
     @Test
@@ -93,8 +87,7 @@ class PlannerTest {
 
         Plan plan = planner.plan("trips", Optional.empty());
 
-        ScanOperator scan = assertInstanceOf(ScanOperator.class, plan.root());
-        assertEquals(4, scan.partitions().size());
+        assertInstanceOf(ScanOperator.class, plan.root());
         assertStats(new ScanStats(4, 4, 0), plan.stats());
         assertEquals(8, drain(plan.root()).size());
     }

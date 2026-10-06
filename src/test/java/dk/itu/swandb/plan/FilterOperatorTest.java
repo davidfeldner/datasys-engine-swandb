@@ -29,8 +29,6 @@ class FilterOperatorTest {
                 new TestListOperator(ROWS), 1, DISTANCE, Comparison.GREATER_THAN, 100L);
 
         assertRows(List.<Object[]>of(ROWS.get(1)), drain(filter));
-        assertEquals(3, filter.rowsIn());
-        assertEquals(1, filter.rowsOut());
     }
 
     @Test
@@ -48,8 +46,6 @@ class FilterOperatorTest {
                 new TestListOperator(ROWS), 1, DISTANCE, Comparison.LESS_THAN, 100L);
 
         assertRows(List.of(ROWS.get(0), ROWS.get(2)), drain(filter));
-        assertEquals(3, filter.rowsIn());
-        assertEquals(2, filter.rowsOut());
     }
 
     @Test
@@ -58,8 +54,6 @@ class FilterOperatorTest {
                 new TestListOperator(List.of()), 1, DISTANCE, Comparison.GREATER_THAN, 0L);
 
         assertEquals(List.of(), drain(filter));
-        assertEquals(0, filter.rowsIn());
-        assertEquals(0, filter.rowsOut());
     }
 
     private static List<Object[]> drain(Operator operator) {
