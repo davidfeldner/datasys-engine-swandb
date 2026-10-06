@@ -82,6 +82,29 @@ class EngineIT {
         assertTrue(capture.stderr().contains("unknown table: missing"), capture.stderr());
     }
 
+    /**
+     * Required test of Exercise 5: a failing statement must leave an
+     * {@code ERROR} line for it in {@code logs/engine.log}, so the failure is
+     * visible when the engine later reads its own log. A unique tag in the
+     * table name isolates this run's lines from every other line in the file.
+     */
+    @Test
+    void failingStatementLeavesAnErrorLineInTheLog(@TempDir Path tmp) throws Exception {
+        String tag = UUID.randomUUID().toString().replace("-", "");
+        Path script = tmp.resolve("fail-" + tag + ".sql");
+        Files.writeString(script, "SELECT * FROM missing_" + tag + ";\n");
+
+        Capture capture = run(new String[]{"-f", script.toString()}, tmp);
+        assertEquals(1, capture.exitCode());
+
+        List<String> errorLines = Files.readAllLines(Path.of("logs", "engine.log")).stream()
+                .filter(line -> line.contains(tag))
+                .filter(line -> line.split(",", -1)[4].equals("ERROR"))
+                .toList();
+        assertFalse(errorLines.isEmpty(),
+                "expected an ERROR line for the failing statement, tag " + tag);
+    }
+
     @Test
     void statementNumberCountsFromOneAndReturnsToZeroForStartAndStop(@TempDir Path tmp) throws Exception {
         String tag = UUID.randomUUID().toString().replace("-", "");
