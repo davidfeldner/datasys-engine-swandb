@@ -76,7 +76,6 @@ public final class Catalog {
         }
 
         public int index() { return index; }
-        public int rowCount() { return rowCount; }
         public List<ColumnSummary> columns() { return columns; }
         public long offset() { return offset; }
     }
