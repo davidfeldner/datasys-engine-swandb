@@ -10,12 +10,6 @@ public final class SqlParseException extends RuntimeException {
     private final int line;
     private final int column;
 
-    public SqlParseException(String message, int line, int column) {
-        super(message + " at line " + line + ":" + column);
-        this.line = line;
-        this.column = column;
-    }
-
     public SqlParseException(String message, int line, int column, Throwable cause) {
         super(message + " at line " + line + ":" + column, cause);
         this.line = line;

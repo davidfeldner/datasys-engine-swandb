@@ -36,11 +36,6 @@ public final class ScanOperator implements Operator {
         this.partitions = List.copyOf(partitions);
     }
 
-    /** The partitions this scan was handed, in order. */
-    public List<Catalog.PartitionEntry> partitions() {
-        return partitions;
-    }
-
     @Override
     public void open() {
         partitionIndex = 0;

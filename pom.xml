@@ -57,6 +57,9 @@
   </dependencies>
 
   <build>
+    <!-- Fixed artifact name: `mvn package` writes target/engine.jar, which the
+         `engine` launcher script runs without a Maven layer in between. -->
+    <finalName>engine</finalName>
     <plugins>
       <!-- Generates the lexer, parser and visitor from Sql.g4 into
            target/generated-sources/antlr4, which joins the compile path
@@ -102,7 +105,31 @@
           </execution>
         </executions>
       </plugin>
-      <!-- Lets `mvn exec:java` start the engine -->
+      <!-- Writes the classes and every runtime dependency into one runnable
+           JAR, target/engine.jar, during `mvn package`. The manifest
+           transformer records the main class; the services transformer merges
+           META-INF/services so SLF4J finds the Log4j2 backend inside the
+           merged JAR (without it the CSV log stays empty). -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.2</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>dk.itu.swandb.Engine</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <!-- Lets `mvn exec:java` start the engine from the source tree -->
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
