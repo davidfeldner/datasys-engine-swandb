@@ -28,6 +28,11 @@ def label(const: str) -> str:
     return "id > %d (%.1f%%)" % (c, 100.0 * (rows - c) / rows)
 
 
+def quartile(times: list[int], n: int) -> float:
+    """The n-th quartile of already-sorted `times`, or the value itself."""
+    return statistics.quantiles(times, n=4, method="inclusive")[n - 1] if len(times) > 1 else times[0]
+
+
 def main() -> int:
     if not RAW.exists():
         print("missing %s; run scripts/run_experiment.sh first" % RAW, file=sys.stderr)
@@ -55,6 +60,10 @@ def main() -> int:
             "medianDurationMs": statistics.median(times),
             "minDurationMs": times[0],
             "maxDurationMs": times[-1],
+            # Quartiles at n=5 are more defensible than min/max, which are just
+            # the two most extreme of five draws. Needs at least 2 repeats.
+            "q1DurationMs": quartile(times, 1),
+            "q3DurationMs": quartile(times, 3),
             "partitionsRead": reads[0] if len(reads) == 1 else "mixed:" + ",".join(map(str, reads)),
             "rowsOut": rows_out[0] if len(rows_out) == 1 else "mixed",
         })
@@ -92,15 +101,24 @@ def make_plot(points) -> None:
             pts = sorted((p for p in points
                           if p["ordering"] == ordering and p["const"] == const),
                          key=lambda p: p["rowsPerPartition"])
-            ax.plot([p["rowsPerPartition"] for p in pts],
-                    [p["medianDurationMs"] for p in pts],
-                    marker="o", label=pts[0]["query"])
+            median = [p["medianDurationMs"] for p in pts]
+            # Interquartile spread, not min/max: the whiskers are the middle
+            # half of the repeats. A wide bar at the 1 ms scale means the point
+            # sits at the instrument floor and its ordering is not resolvable.
+            lower = [p["medianDurationMs"] - p["q1DurationMs"] for p in pts]
+            upper = [p["q3DurationMs"] - p["medianDurationMs"] for p in pts]
+            ax.errorbar([p["rowsPerPartition"] for p in pts], median,
+                        yerr=[lower, upper], marker="o", capsize=4,
+                        elinewidth=1.2, label=pts[0]["query"])
         ax.set_xscale("log")
+        # Linear y: the readings span 1-182 ms and the effect being shown is a
+        # fall from tens of ms to a few ms. A log y compresses exactly that
+        # range and makes the values hard to read off the axis.
         ax.set_xlabel("rows per partition (maxRowsPerPartition)")
         ax.set_title("%s input" % ordering)
         ax.grid(True, which="both", alpha=0.3)
-    axes[0].set_ylabel("median durationMs (engine log)")
-    axes[-1].legend(fontsize=8)
+    axes[0].set_ylabel("median durationMs (engine log), IQR bars")
+    axes[0].legend(fontsize=8)
     fig.suptitle("Partition size vs. SELECT latency (1M rows)")
     fig.tight_layout()
     fig.savefig(PLOT, dpi=150)
