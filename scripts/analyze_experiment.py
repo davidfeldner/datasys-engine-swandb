@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Reduce results/raw.csv to the plot in docs/experiment-design.md.
+"""Reduce results/raw.csv to the plots in docs/experiment-design.md.
 
 y = median durationMs per (ordering, rows-per-partition, query), plus the
-partitions read for that query. Writes results/summary.csv, one row per
-point, and results/plot.png.
+partitions read and the rows actually read for that query. Writes
+results/summary.csv, one row per point, results/plot.png (latency) and
+results/plot_rows_read.png (rows read, deterministic from the catalog).
 
 Usage: scripts/analyze_experiment.py
 """
@@ -17,6 +18,7 @@ REPO = Path(__file__).resolve().parent.parent
 RAW = REPO / "results" / "raw.csv"
 SUMMARY = REPO / "results" / "summary.csv"
 PLOT = REPO / "results" / "plot.png"
+ROWS_PLOT = REPO / "results" / "plot_rows_read.png"
 
 
 def label(const: str) -> str:
@@ -48,6 +50,7 @@ def main() -> int:
     for (ordering, cap, const), rows in groups.items():
         times = sorted(int(r["durationMs"]) for r in rows)
         reads = sorted({int(r["partitionsRead"]) for r in rows})
+        rows_read = sorted({int(r["rowsRead"]) for r in rows})
         rows_out = sorted({int(r["rowsOut"]) for r in rows})
         points.append({
             "ordering": ordering,
@@ -65,6 +68,13 @@ def main() -> int:
             "q1DurationMs": quartile(times, 1),
             "q3DurationMs": quartile(times, 3),
             "partitionsRead": reads[0] if len(reads) == 1 else "mixed:" + ",".join(map(str, reads)),
+            # rowsRead is the sum of the rowCounts of the partitions the
+            # planner kept; rowsWasted = rowsRead - rowsOut is the non-matching
+            # work that pruning could not skip (the boundary partition on
+            # sorted input, nearly the whole table on shuffled input).
+            "rowsRead": rows_read[0] if len(rows_read) == 1 else "mixed:" + ",".join(map(str, rows_read)),
+            "rowsWasted": (rows_read[0] - rows_out[0])
+                          if len(rows_read) == 1 and len(rows_out) == 1 else "mixed",
             "rowsOut": rows_out[0] if len(rows_out) == 1 else "mixed",
         })
 
@@ -76,12 +86,14 @@ def main() -> int:
         w.writerows(points)
 
     for p in points:
-        print("%-8s cap=%-7d %-22s median=%-6s partitionsRead=%-4s rowsOut=%s"
+        print("%-8s cap=%-7d %-22s median=%-6s partitionsRead=%-4s rowsRead=%-8s rowsWasted=%-8s rowsOut=%s"
               % (p["ordering"], p["rowsPerPartition"], p["query"],
-                 p["medianDurationMs"], p["partitionsRead"], p["rowsOut"]))
+                 p["medianDurationMs"], p["partitionsRead"], p["rowsRead"],
+                 p["rowsWasted"], p["rowsOut"]))
 
     make_plot(points)
-    print("wrote %s and %s" % (SUMMARY, PLOT))
+    make_rows_read_plot(points)
+    print("wrote %s, %s and %s" % (SUMMARY, PLOT, ROWS_PLOT))
     return 0
 
 
@@ -122,6 +134,44 @@ def make_plot(points) -> None:
     fig.suptitle("Partition size vs. SELECT latency (1M rows)")
     fig.tight_layout()
     fig.savefig(PLOT, dpi=150)
+
+
+def make_rows_read_plot(points) -> None:
+    """Plot rows read vs. cap: the deterministic side of the experiment.
+
+    Latency is noisy at the 1 ms floor; rowsRead is not. On sorted input a
+    partition is read when its id max is above the constant, so rowsRead =
+    matches + (C mod cap): the boundary-partition waste grows with cap. On
+    shuffled input every partition survives, so every query reads all 1M rows.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    orderings = sorted({p["ordering"] for p in points})
+    consts = sorted({p["const"] for p in points}, key=lambda c: (c == "ALL", c))
+    fig, axes = plt.subplots(1, len(orderings), figsize=(7 * len(orderings), 5), sharey=True)
+    if len(orderings) == 1:
+        axes = [axes]
+
+    for ax, ordering in zip(axes, orderings):
+        for const in consts:
+            pts = sorted((p for p in points
+                          if p["ordering"] == ordering and p["const"] == const),
+                         key=lambda p: p["rowsPerPartition"])
+            ax.plot([p["rowsPerPartition"] for p in pts],
+                    [p["rowsRead"] for p in pts],
+                    marker="o", label=pts[0]["query"])
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_xlabel("rows per partition (maxRowsPerPartition)")
+        ax.set_title("%s input" % ordering)
+        ax.grid(True, which="both", alpha=0.3)
+    axes[0].set_ylabel("rows read (sum of read partition rowCounts)")
+    axes[0].legend(fontsize=8)
+    fig.suptitle("Partition size vs. rows read (catalog, deterministic)")
+    fig.tight_layout()
+    fig.savefig(ROWS_PLOT, dpi=150)
 
 
 if __name__ == "__main__":

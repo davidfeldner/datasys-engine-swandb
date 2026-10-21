@@ -22,8 +22,14 @@ ROWS=1000000
 # x axis: rows per partition, log scale, 1k..100k (docs/experiment-design.md).
 CAPS=(1000 3000 10000 30000 100000)
 # id > C, run with constants giving different selectivities.
-# C=0 is the full scan. Share of the table passing = (1 - C/ROWS).
-CONSTS=(0 500000 900000 990000)
+# The constants are deliberately not multiples of the cap grid: round values
+# such as 500000, 900000 and 990000 sit exactly on partition boundaries for
+# most of these caps, so C mod cap = 0 and the boundary partition is never
+# exercised. The non-zero values keep C mod cap != 0 at every cap, so the cost
+# of reading a partial boundary partition is visible instead of hidden; C=0 is
+# the all-rows baseline.
+# Share of the table passing = (1 - C/ROWS).
+CONSTS=(0 543210 912345 987654)
 ORDERINGS=(sorted shuffled)
 
 DATA_DIR="$REPO/experiment-data"
@@ -80,7 +86,7 @@ python3 scripts/gen_experiment_data.py "$DATA_DIR" "$ROWS" > "$OUT/data.txt"
 cat "$OUT/environment.txt"
 
 # --- Sweep ----------------------------------------------------------------
-echo "setting,ordering,rowsPerPartition,const,repeat,statementNumber,sessionId,durationMs,partitionsRead,partitionsPruned,rowsOut" \
+echo "setting,ordering,rowsPerPartition,const,repeat,statementNumber,sessionId,durationMs,partitionsRead,partitionsPruned,rowsRead,rowsOut" \
   > "$OUT/raw.csv"
 
 for ordering in "${ORDERINGS[@]}"; do
@@ -110,6 +116,26 @@ for ordering in "${ORDERINGS[@]}"; do
     fi
     echo "  $name: cap=$stored partitions=$built"
 
+    # Exact rowsRead per query: the planner keeps a partition when its id max
+    # is above the constant (every partition for a full scan), so the catalog
+    # rowCounts give the rows that will actually be decoded. This is computed
+    # here, from the same catalog the planner reads, and needs no engine change.
+    python3 - "$work/data/catalog.json" "${CONSTS[@]}" ALL <<'PY' > "$work/rowsread.tsv"
+import json, sys
+
+partitions = json.load(open(sys.argv[1]))["tables"]["trips"]["partitions"]
+
+def id_max(partition):
+    return next(s["max"] for s in partition["columns"] if s["name"] == "id")
+
+for const in sys.argv[2:]:
+    if const == "ALL":
+        print("ALL", sum(p["rowCount"] for p in partitions))
+    else:
+        c = int(const)
+        print(c, sum(p["rowCount"] for p in partitions if id_max(p) > c))
+PY
+
     # Fresh log directory per setting: move the created log into place, then
     # run the timed session against an empty live log.
     mv "$work/logs/engine.log" "$logdir/load.log"
@@ -137,8 +163,16 @@ for ordering in "${ORDERINGS[@]}"; do
     # summary lines (they carry durationMs and the partition counts), skip
     # the warm-up (first occurrence of each const / full scan), and emit the
     # timed repeats.
-    awk -v setting="$name" -v ordering="$ordering" -v cap="$cap" -v repeats="$REPEATS" '
-      BEGIN { FS=","; OFS="," }
+    awk -v setting="$name" -v ordering="$ordering" -v cap="$cap" -v repeats="$REPEATS" \
+        -v rowsfile="$work/rowsread.tsv" '
+      BEGIN {
+        FS=","; OFS=","
+        while ((getline line < rowsfile) > 0) {
+          split(line, a, " ")
+          rows[a[1]] = a[2]
+        }
+        close(rowsfile)
+      }
       $6 != "StorageEngine" { next }
       $7 !~ /rowsOut=/ { next }
       {
@@ -157,7 +191,7 @@ for ordering in "${ORDERINGS[@]}"; do
         if (match($7, /partitionsRead=[0-9]+/)) pr = substr($7, RSTART+15, RLENGTH-15)
         if (match($7, /partitionsPruned=[0-9]+/)) pp = substr($7, RSTART+17, RLENGTH-17)
         if (match($7, /rowsOut=[0-9]+/)) ro = substr($7, RSTART+8, RLENGTH-8)
-        print setting, ordering, cap, const, rep, $3, $2, dur, pr, pp, ro
+        print setting, ordering, cap, const, rep, $3, $2, dur, pr, pp, rows[const], ro
       }
     ' "$logdir/run.log" >> "$OUT/raw.csv"
 
