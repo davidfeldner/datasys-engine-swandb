@@ -15,3 +15,5 @@ data/
 # Written by the maven-shade-plugin next to the POM; never committed
 dependency-reduced-pom.xml
 ours.csv
+experiment-data/
+results/
