@@ -1,0 +1,10 @@
+{
+  "layout": "elk",
+  "elk": {
+    "mergeEdges": false,
+    "nodePlacementStrategy": "LINEAR_SEGMENTS"
+  },
+  "flowchart": {
+    "curve": "stepBefore"
+  }
+}
