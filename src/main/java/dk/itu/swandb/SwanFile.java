@@ -87,28 +87,146 @@ public final class SwanFile {
             for (Partition p : partitions) {
                 // Record the offset of this partition (before writing rowCount)
                 partitionOffsets.add(channel.position());
-
-                ByteBuffer rcBuf = ByteBuffer.allocate(4);
-                rcBuf.putInt(p.rowCount);
-                rcBuf.flip();
-                channel.write(rcBuf);
-
-                for (int c = 0; c < schema.size(); c++) {
-                    ColumnType type = schema.get(c).type();
-                    List<Object> values = p.columnValues.get(c);
-                    byte[] encoded = ValueCodec.encodeColumn(type, values);
-
-                    ByteBuffer lenBuf = ByteBuffer.allocate(4);
-                    lenBuf.putInt(encoded.length);
-                    lenBuf.flip();
-                    channel.write(lenBuf);
-
-                    ByteBuffer colBuf = ByteBuffer.wrap(encoded);
-                    channel.write(colBuf);
-                }
+                writePartition(channel, schema, p);
             }
         }
         return partitionOffsets;
+    }
+
+    /**
+     * Append partitions to an existing file: keep the first {@code keepBytes}
+     * bytes of partition data, set the header's partition count to the number
+     * of partitions those bytes hold plus the new ones, and write the new
+     * partitions after them.
+     *
+     * <p>The count sits in the header, so a commit cannot literally append:
+     * it truncates the file to the bytes it keeps, rewrites the count and
+     * appends. Truncation is what makes it safe to drop reclamation — the
+     * bytes below {@code keepBytes} are never rewritten, so every offset a
+     * live version recorded there still points at the same partition.
+     *
+     * @param keepEnd the absolute byte the kept partitions end at, which is
+     *                where the file is truncated to; bytes past it are those
+     *                no live version points at any more.
+     * @param keptPartitions how many partitions the bytes before
+     *                {@code keepEnd} hold, so the header count can be updated.
+     * @return the byte offsets of the appended partitions, in order.
+     */
+    public static List<Long> append(Path path, List<ColumnSpec> schema, List<Partition> partitions,
+            long keepEnd, int keptPartitions) throws IOException {
+        // metadataBytes already counts the header.
+        long metadataEnd = metadataBytes(schema.size());
+        if (keepEnd < metadataEnd)
+            throw new IllegalArgumentException("keepEnd must be >= " + metadataEnd + ": " + keepEnd);
+        if (keptPartitions < 0)
+            throw new IllegalArgumentException("keptPartitions must be >= 0: " + keptPartitions);
+        List<Long> partitionOffsets = new ArrayList<>(partitions.size());
+        try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "rw");
+             FileChannel channel = raf.getChannel()) {
+            if (channel.size() < keepEnd)
+                throw new IllegalStateException(
+                        "cannot keep bytes up to " + keepEnd + " in " + path + ": the file is shorter than that");
+            checkHeader(channel, path, schema);
+            channel.truncate(keepEnd);
+
+            ByteBuffer count = ByteBuffer.allocate(4);
+            count.putInt(keptPartitions + partitions.size());
+            count.flip();
+            channel.position(partitionCountOffset(schema.size()));
+            channel.write(count);
+
+            channel.position(keepEnd);
+            for (Partition p : partitions) {
+                partitionOffsets.add(channel.position());
+                writePartition(channel, schema, p);
+            }
+        }
+        return partitionOffsets;
+    }
+
+    /** The partition count recorded in the file header. */
+    public static int readPartitionCount(Path path, int columnCount) throws IOException {
+        try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "r");
+             FileChannel channel = raf.getChannel()) {
+            ByteBuffer count = ByteBuffer.allocate(4);
+            channel.position(partitionCountOffset(columnCount));
+            channel.read(count);
+            count.flip();
+            return count.getInt();
+        }
+    }
+
+    /**
+     * Layout after the fixed header, as {@link #write} lays it down:
+     * <pre>
+     *   columnCount   4 bytes
+     *   columnTypes   1 byte per column
+     *   partitionCount 4 bytes
+     *   partitions...
+     * </pre>
+     */
+    public static long columnCountOffset() {
+        return HEADER_BYTES;
+    }
+
+    /** The byte at which the 4-byte partition count sits: after the column types. */
+    public static long partitionCountOffset(int columnCount) {
+        return HEADER_BYTES + 4 + columnCount;
+    }
+
+    /** The byte at which partitions start: after the partition count. */
+    public static long metadataBytes(int columnCount) {
+        return partitionCountOffset(columnCount) + 4;
+    }
+
+    private static void checkHeader(FileChannel channel, Path path, List<ColumnSpec> schema)
+            throws IOException {
+        ByteBuffer header = ByteBuffer.allocate(HEADER_BYTES);
+        channel.position(0);
+        while (header.hasRemaining() && channel.read(header) > 0) {
+            // read the whole fixed header before the column count
+        }
+        header.flip();
+        byte[] magic = new byte[MAGIC.length];
+        header.get(magic);
+        for (int i = 0; i < MAGIC.length; i++) {
+            if (magic[i] != MAGIC[i]) throw new IllegalStateException("bad magic in " + path);
+        }
+        byte version = header.get();
+        if (version != VERSION)
+            throw new IllegalStateException("unsupported swan version " + version + " in " + path);
+        ByteBuffer meta = ByteBuffer.allocate(4);
+        channel.position(columnCountOffset());
+        channel.read(meta);
+        meta.flip();
+        int columnCount = meta.getInt();
+        if (columnCount != schema.size())
+            throw new IllegalStateException(
+                    "schema column count mismatch in " + path + ": file=" + columnCount + " schema=" + schema.size());
+    }
+
+    private static void writePartition(FileChannel channel, List<ColumnSpec> schema, Partition p)
+            throws IOException {
+        ByteBuffer rcBuf = ByteBuffer.allocate(4);
+        rcBuf.putInt(p.rowCount);
+        rcBuf.flip();
+        channel.write(rcBuf);
+
+        for (int c = 0; c < schema.size(); c++) {
+            ColumnType type = schema.get(c).type();
+            List<Object> values = p.columnValues.get(c);
+            byte[] encoded = ValueCodec.encodeColumn(type, values);
+
+            ByteBuffer lenBuf = ByteBuffer.allocate(4);
+            lenBuf.putInt(encoded.length);
+            lenBuf.flip();
+            channel.write(lenBuf);
+
+            ByteBuffer colBuf = ByteBuffer.wrap(encoded);
+            while (colBuf.hasRemaining()) {
+                channel.write(colBuf);
+            }
+        }
     }
 
     /** Read all partitions from a file, returning them in on-disk order. */
@@ -162,6 +280,10 @@ public final class SwanFile {
     /** Read a single partition at the given byte offset. */
     public static Partition readPartition(Path path, List<ColumnSpec> schema, long offset)
             throws IOException {
+        if (offset < 0)
+            throw new IllegalArgumentException(
+                    "partition offset must be >= 0 in " + path + ": " + offset
+                            + "; a catalog without offsets must be read with readAll");
         try (RandomAccessFile raf = new RandomAccessFile(path.toFile(), "r");
              FileChannel channel = raf.getChannel()) {
             channel.position(offset);

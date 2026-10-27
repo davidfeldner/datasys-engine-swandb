@@ -1,5 +1,5 @@
 /*
- * Grammar for the SQL subset of Part 1: CREATE TABLE, COPY, SELECT.
+ * Grammar for the SQL subset: CREATE TABLE, COPY, SELECT, DELETE.
  *
  * The directory holding this file below src/main/antlr4 is the Java package
  * of the generated classes, so the lexer, parser, listener and visitor all
@@ -18,7 +18,7 @@ options { caseInsensitive = true; }
 
 // A whole script: one or more ';'-terminated statements, then end of input.
 script      : (statement ';')+ EOF ;
-statement   : createTable | copy | select ;
+statement   : createTable | copy | select | delete ;
 
 createTable : CREATE TABLE IDENTIFIER '(' columnDef (',' columnDef)* ')' ;
 columnDef   : IDENTIFIER columnType ;
@@ -28,6 +28,8 @@ copy        : COPY IDENTIFIER FROM STRING_LITERAL ;
 
 // WHERE is optional, as in DuckDB.
 select      : SELECT '*' FROM IDENTIFIER (WHERE predicate)? ;
+// Deleting every row is legal; stdout stays reserved for SELECT.
+delete      : DELETE FROM IDENTIFIER (WHERE predicate)? ;
 predicate   : IDENTIFIER comparison=('=' | '<' | '>') literal ;
 literal     : STRING_LITERAL | LONG_LITERAL | DOUBLE_LITERAL ;
 
@@ -35,7 +37,7 @@ literal     : STRING_LITERAL | LONG_LITERAL | DOUBLE_LITERAL ;
 
 // Keyword rules MUST precede IDENTIFIER, or IDENTIFIER swallows them.
 CREATE : 'CREATE' ;   TABLE : 'TABLE' ;   COPY : 'COPY' ;   FROM : 'FROM' ;
-SELECT : 'SELECT' ;   WHERE : 'WHERE' ;
+SELECT : 'SELECT' ;   WHERE : 'WHERE' ;   DELETE : 'DELETE' ;
 // The type names are tokens of their own, distinct from the literals below.
 STRING : 'STRING' ;   LONG : 'LONG' ;   DOUBLE : 'DOUBLE' ;
 
