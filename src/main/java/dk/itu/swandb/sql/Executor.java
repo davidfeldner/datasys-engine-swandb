@@ -6,9 +6,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import dk.itu.swandb.Result;
 import dk.itu.swandb.StorageEngine;
+import dk.itu.swandb.plan.Selection;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
+import dk.itu.swandb.sql.ast.DeleteStatement;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -23,6 +26,15 @@ import dk.itu.swandb.sql.ast.Statement;
  * log line a statement writes — binder, planner, engine — shares it. The
  * first statement is 1; script-level parsing and the engine start/stop lines
  * stay at the 0 set at startup.
+ *
+ * <p>Each statement ends with one summary line naming the version it
+ * committed or read:
+ *
+ * <pre>
+ * statement=COPY table=trips rows=8 partitions=2 version=2 durationMs=12
+ * statement=DELETE table=trips rowsDeleted=4 partitionsRewritten=1 partitionsCarried=3 version=3 durationMs=9
+ * statement=SELECT table=trips rowsOut=4 partitionsRead=2 partitionsPruned=2 version=3 durationMs=3
+ * </pre>
  */
 public final class Executor {
 
@@ -58,8 +70,8 @@ public final class Executor {
     /**
      * Binds and executes one statement inside its own MDC statement number.
      *
-     * @return the statement's rows; empty for {@code CREATE TABLE} and
-     *         {@code COPY}, which have no operator tree.
+     * @return the statement's rows; empty for every statement but
+     *         {@code SELECT}, which is the only one writing to stdout.
      */
     public List<Object[]> execute(Statement statement) {
         statementNumber++;
@@ -67,10 +79,9 @@ public final class Executor {
         long start = System.nanoTime();
         try {
             binder.bind(statement);
-            List<Object[]> rows = run(statement);
-            LOGGER.debug("statement={} table={} rowsOut={} durationMs={}",
-                    kind(statement), table(statement), rows.size(), elapsedMs(start));
-            return rows;
+            Result result = run(statement);
+            logSummary(statement, result, elapsedMs(start));
+            return result.rowsOut();
         } catch (RuntimeException e) {
             LOGGER.error("statement={} table={} failed reason={} durationMs={}",
                     kind(statement), table(statement),
@@ -80,26 +91,44 @@ public final class Executor {
         }
     }
 
-    private List<Object[]> run(Statement statement) {
+    private Result run(Statement statement) {
         return switch (statement) {
-            case CreateTableStatement createTable -> {
-                engine.createTable(createTable.tableName(), createTable.columns());
-                yield List.of();
+            case CreateTableStatement createTable ->
+                    engine.createTable(createTable.tableName(), createTable.columns());
+            case CopyStatement copy -> engine.copyFile(copy.tableName(), copy.csvFilePath());
+            case SelectStatement select -> {
+                List<Object[]> rows = engine.select(select.tableName(), selection(select.where()));
+                yield Result.selected(engine.lastReadVersion(), rows,
+                        engine.lastPartitionsRead(), engine.lastPartitionsPruned());
             }
-            case CopyStatement copy -> {
-                engine.copyFile(copy.tableName(), copy.csvFilePath());
-                yield List.of();
-            }
-            case SelectStatement select -> executeSelect(select);
+            case DeleteStatement delete -> engine.delete(delete.tableName(), selection(delete.where()));
         };
     }
 
-    private List<Object[]> executeSelect(SelectStatement select) {
-        if (select.where().isEmpty())
-            return engine.selectAll(select.tableName());
-        Predicate predicate = select.where().get();
-        return engine.select(select.tableName(), predicate.columnName(),
-                predicate.comparison(), predicate.constant());
+    /** The AST's optional predicate as the storage-level selection. */
+    private static java.util.Optional<Selection> selection(java.util.Optional<Predicate> where) {
+        return where.map(p -> new Selection(p.columnName(), p.comparison(), p.constant()));
+    }
+
+    /** One line per statement, carrying the version it committed or read. */
+    private static void logSummary(Statement statement, Result result, long durationMs) {
+        switch (statement) {
+            case CreateTableStatement s -> LOGGER.debug(
+                    "statement={} table={} version={} durationMs={}",
+                    kind(statement), s.tableName(), result.version(), durationMs);
+            case CopyStatement s -> LOGGER.debug(
+                    "statement={} table={} rows={} partitions={} version={} durationMs={}",
+                    kind(statement), s.tableName(), result.rows(), result.partitions(),
+                    result.version(), durationMs);
+            case DeleteStatement s -> LOGGER.debug(
+                    "statement={} table={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} version={} durationMs={}",
+                    kind(statement), s.tableName(), result.rows(), result.partitionsRewritten(),
+                    result.partitionsCarried(), result.version(), durationMs);
+            case SelectStatement s -> LOGGER.debug(
+                    "statement={} table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                    kind(statement), s.tableName(), result.rows(), result.partitionsRead(),
+                    result.partitionsPruned(), result.version(), durationMs);
+        }
     }
 
     private static String kind(Statement statement) {
@@ -107,6 +136,7 @@ public final class Executor {
             case CreateTableStatement ignored -> "CREATE";
             case CopyStatement ignored -> "COPY";
             case SelectStatement ignored -> "SELECT";
+            case DeleteStatement ignored -> "DELETE";
         };
     }
 
@@ -115,6 +145,7 @@ public final class Executor {
             case CreateTableStatement s -> s.tableName();
             case CopyStatement s -> s.tableName();
             case SelectStatement s -> s.tableName();
+            case DeleteStatement s -> s.tableName();
         };
     }
 

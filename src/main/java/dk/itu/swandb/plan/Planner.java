@@ -16,45 +16,53 @@ import dk.itu.swandb.ScanStats;
 import dk.itu.swandb.enums.Comparison;
 
 /**
- * Turns a table name plus an optional {@link Selection} into an operator
- * tree, and this is where partition pruning now happens.
+ * Turns a pinned table version plus an optional {@link Selection} into an
+ * operator tree, and this is where partition pruning happens.
  *
- * <p>The catalog is the single source of truth for min/max summaries
- * ({@code docs/storage-design.md}), so every pruning decision is made from
- * catalog metadata alone, before any data file is opened. Partitions that
- * may match survive into a {@link ScanOperator}; the pruned ones never
- * reach it. A {@code WHERE} wraps that scan in a {@link FilterOperator}; no
- * {@code WHERE} leaves a bare scan over every partition.
+ * <p>Since Exercise 7 the planner does not read the catalog: it is handed
+ * the schema and the partition list of the version the statement pinned, so
+ * nothing can change underneath a running statement. Every pruning decision
+ * is still made from min/max summaries alone, before any data file is
+ * opened. Partitions that may match survive into a {@link ScanOperator}; the
+ * pruned ones never reach it. A {@code WHERE} wraps that scan in a
+ * {@link FilterOperator}; no {@code WHERE} leaves a bare scan over every
+ * partition.
  *
- * <p>Filling {@link ScanStats} and emitting the {@code decision=READ|PRUNED}
- * lines here, rather than in the storage engine, is the visible half of the
- * refactor.
+ * <p>The decision itself is {@link Pruning#decide}, the same answer
+ * {@code DELETE} uses to choose its rewrite set, so the two can never
+ * disagree about a partition.
  */
 public final class Planner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Planner.class);
 
-    private final Catalog catalog;
-    private final Path dataDir;
+    private final List<ColumnSpec> columns;
+    private final List<Catalog.PartitionEntry> partitions;
+    private final Path dataPath;
 
-    public Planner(Catalog catalog, Path dataDir) {
-        this.catalog = catalog;
-        this.dataDir = dataDir;
+    /**
+     * @param columns    the schema of the pinned version, in column order
+     * @param partitions the partition list of the pinned version
+     * @param dataPath   the table's single data file
+     */
+    public Planner(List<ColumnSpec> columns, List<Catalog.PartitionEntry> partitions, Path dataPath) {
+        this.columns = List.copyOf(columns);
+        this.partitions = List.copyOf(partitions);
+        this.dataPath = dataPath;
     }
 
     /**
-     * Plans a scan of {@code tableName}. An empty {@code where} reads every
-     * partition; a present one is pruned per partition and then applied as a
-     * filter. Throws {@link IllegalArgumentException} for an unknown table or
-     * column, or a constant whose type does not match the column.
+     * Plans a scan. An empty {@code where} reads every partition; a present
+     * one is pruned per partition and then applied as a filter. Throws
+     * {@link IllegalArgumentException} for an unknown column or a constant
+     * whose type does not match the column.
      */
     public Plan plan(String tableName, Optional<Selection> where) {
         long start = System.nanoTime();
         try {
-            Catalog.TableEntry table = catalog.getTable(tableName);
             Plan plan = where.isEmpty()
-                    ? planBareScan(table)
-                    : planFilteredScan(table, where.get());
+                    ? planBareScan(tableName)
+                    : planFilteredScan(tableName, where.get());
             LOGGER.debug("table={} partitionsTotal={} partitionsRead={} partitionsPruned={} durationMs={}",
                     LogFormat.sanitize(tableName), plan.stats().partitionsTotal(),
                     plan.stats().partitionsRead(), plan.stats().partitionsPruned(),
@@ -67,24 +75,23 @@ public final class Planner {
         }
     }
 
-    private Plan planBareScan(Catalog.TableEntry table) {
-        List<Catalog.PartitionEntry> partitions = table.partitions;
+    private Plan planBareScan(String tableName) {
         for (Catalog.PartitionEntry partition : partitions) {
             LOGGER.debug("table={} partition={} decision={}",
-                    LogFormat.sanitize(table.name), partition.index(), "READ");
+                    LogFormat.sanitize(tableName), partition.index(), "READ");
         }
-        Operator scan = new ScanOperator(dataPath(table), table.columns, partitions);
+        Operator scan = new ScanOperator(dataPath, columns, partitions);
         return new Plan(scan, new ScanStats(partitions.size(), partitions.size(), 0));
     }
 
-    private Plan planFilteredScan(Catalog.TableEntry table, Selection selection) {
-        int columnIndex = columnIndex(table, selection.columnName());
-        ColumnSpec filterColumn = table.columns.get(columnIndex);
+    private Plan planFilteredScan(String tableName, Selection selection) {
+        int columnIndex = columnIndex(selection.columnName());
+        ColumnSpec filterColumn = columns.get(columnIndex);
         validateConstant(filterColumn, selection.constant());
 
         List<Catalog.PartitionEntry> survivors = new ArrayList<>();
         int pruned = 0;
-        for (Catalog.PartitionEntry partition : table.partitions) {
+        for (Catalog.PartitionEntry partition : partitions) {
             Catalog.ColumnSummary summary = summary(partition, selection.columnName());
             // Never prune on missing metadata: a partition that is never read
             // can never be recovered by the filter below, so an incomplete
@@ -92,36 +99,33 @@ public final class Planner {
             if (summary == null || summary.min() == null || summary.max() == null)
                 throw new IllegalStateException("missing min/max summary for column "
                         + selection.columnName() + " in partition " + partition.index()
-                        + " of table " + table.name + "; refusing to prune on incomplete catalog metadata");
+                        + " of table " + tableName + "; refusing to prune on incomplete catalog metadata");
             Object min = summary.min();
             Object max = summary.max();
-            boolean canPrune = Pruning.canPrune(selection.comparison(), selection.constant(),
+            Pruning.Decision decision = Pruning.decide(selection.comparison(), selection.constant(),
                     min, max, filterColumn.type());
             LOGGER.debug(
                     "table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                    LogFormat.sanitize(table.name), LogFormat.sanitize(selection.columnName()),
+                    LogFormat.sanitize(tableName), LogFormat.sanitize(selection.columnName()),
                     selection.comparison(), LogFormat.sanitize(selection.constant()),
                     partition.index(), LogFormat.sanitize(min), LogFormat.sanitize(max),
-                    canPrune ? "PRUNED" : "READ");
-            if (canPrune)
+                    decision == Pruning.Decision.PROVABLY_FREE ? "PRUNED" : "READ");
+            if (decision == Pruning.Decision.PROVABLY_FREE)
                 pruned++;
             else
                 survivors.add(partition);
         }
 
-        Operator scan = new ScanOperator(dataPath(table), table.columns, survivors);
+        Operator scan = new ScanOperator(dataPath, columns, survivors);
         Operator root = new FilterOperator(scan, columnIndex, filterColumn,
                 selection.comparison(), selection.constant());
-        return new Plan(root, new ScanStats(table.partitions.size(), survivors.size(), pruned));
+        return new Plan(root, new ScanStats(partitions.size(), survivors.size(), pruned));
     }
 
-    private Path dataPath(Catalog.TableEntry table) {
-        return dataDir.resolve(table.dataFile);
-    }
-
-    private static int columnIndex(Catalog.TableEntry table, String columnName) {
-        for (int i = 0; i < table.columns.size(); i++) {
-            if (table.columns.get(i).name().equals(columnName))
+    /** Index of the column the selection names, or {@link IllegalArgumentException}. */
+    public int columnIndex(String columnName) {
+        for (int i = 0; i < columns.size(); i++) {
+            if (columns.get(i).name().equals(columnName))
                 return i;
         }
         throw new IllegalArgumentException("unknown column: " + columnName);

@@ -94,11 +94,11 @@ class PlannerTest {
 
     @Test
     void aMissingSummaryIsAnErrorInsteadOfASilentPrune(@TempDir Path tmp) throws Exception {
-        Path dataDir = tmp.resolve("data");
-        Catalog catalog = sortedTripsCatalog(tmp);
-        // Corrupt the catalog: partition 0 no longer carries any summaries.
-        catalog.getTable("trips").partitions.get(0).columns.clear();
-        Planner planner = new Planner(catalog, dataDir);
+        Catalog.TableEntry table = sortedTrips(tmp);
+        // Corrupt the pinned metadata: partition 0 no longer carries any summaries.
+        List<Catalog.PartitionEntry> partitions = new ArrayList<>(table.partitions);
+        partitions.set(0, summaryless(partitions.get(0)));
+        Planner planner = new Planner(table.columns, partitions, dataPath(tmp, table));
 
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> planner.plan("trips",
                 Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L))));
@@ -107,28 +107,45 @@ class PlannerTest {
 
     @Test
     void aNullBoundIsAnErrorInsteadOfASilentPrune(@TempDir Path tmp) throws Exception {
-        Path dataDir = tmp.resolve("data");
-        Catalog catalog = sortedTripsCatalog(tmp);
+        Catalog.TableEntry table = sortedTrips(tmp);
         // Column 1 is distance; wipe only its lower bound.
-        catalog.getTable("trips").partitions.get(0).columns.get(1).min = null;
-        Planner planner = new Planner(catalog, dataDir);
+        List<Catalog.PartitionEntry> partitions = new ArrayList<>(table.partitions);
+        partitions.set(0, withNullDistanceMin(partitions.get(0)));
+        Planner planner = new Planner(table.columns, partitions, dataPath(tmp, table));
 
         assertThrows(IllegalStateException.class, () -> planner.plan("trips",
                 Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L))));
     }
 
-    private static Planner plannerOverSortedTrips(Path tmp) throws Exception {
-        Path dataDir = tmp.resolve("data");
-        return new Planner(sortedTripsCatalog(tmp), dataDir);
+    private static Catalog.PartitionEntry summaryless(Catalog.PartitionEntry entry) {
+        Catalog.PartitionEntry copy = entry.copy();
+        copy.columns.clear();
+        return copy;
     }
 
-    private static Catalog sortedTripsCatalog(Path tmp) throws Exception {
+    private static Catalog.PartitionEntry withNullDistanceMin(Catalog.PartitionEntry entry) {
+        Catalog.PartitionEntry copy = entry.copy();
+        copy.columns.get(1).min = null;
+        return copy;
+    }
+
+    private static Planner plannerOverSortedTrips(Path tmp) throws Exception {
+        Catalog.TableEntry table = sortedTrips(tmp);
+        return new Planner(table.columns, table.partitions, dataPath(tmp, table));
+    }
+
+    private static Path dataPath(Path tmp, Catalog.TableEntry table) {
+        return tmp.resolve("data").resolve(table.dataFile);
+    }
+
+    private static Catalog.TableEntry sortedTrips(Path tmp) throws Exception {
         Path dataDir = tmp.resolve("data");
         StorageEngine engine = new StorageEngine(dataDir, 2);
         engine.createTable("trips", TRIPS_SCHEMA);
         Path csv = copyResource(tmp, "trips_sorted_by_distance.csv");
         engine.copyFile("trips", csv.toString());
-        return new Catalog(dataDir);
+        engine.close();
+        return new Catalog(dataDir).getTable("trips");
     }
 
     private static Path copyResource(Path tmp, String resourceName) throws Exception {

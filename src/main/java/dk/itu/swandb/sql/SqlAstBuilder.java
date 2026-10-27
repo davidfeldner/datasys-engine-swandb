@@ -10,6 +10,7 @@ import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.enums.Comparison;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
+import dk.itu.swandb.sql.ast.DeleteStatement;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -74,6 +75,13 @@ final class SqlAstBuilder extends SqlBaseVisitor<Object> {
         Optional<Predicate> where = Optional.empty();
         if (ctx.predicate() != null) where = Optional.of((Predicate) visit(ctx.predicate()));
         return new SelectStatement(ctx.IDENTIFIER().getText(), where);
+    }
+
+    @Override
+    public Object visitDelete(SqlParser.DeleteContext ctx) {
+        Optional<Predicate> where = Optional.empty();
+        if (ctx.predicate() != null) where = Optional.of((Predicate) visit(ctx.predicate()));
+        return new DeleteStatement(ctx.IDENTIFIER().getText(), where);
     }
 
     @Override

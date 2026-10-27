@@ -11,6 +11,7 @@ import dk.itu.swandb.ColumnSpec;
 import dk.itu.swandb.StorageEngine;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
+import dk.itu.swandb.sql.ast.DeleteStatement;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -43,6 +44,7 @@ public final class Binder {
                 case CreateTableStatement createTable -> bindCreateTable(createTable);
                 case CopyStatement copy -> bindCopy(copy);
                 case SelectStatement select -> bindSelect(select);
+                case DeleteStatement delete -> bindDelete(delete);
             }
             LOGGER.debug("statement={} durationMs={}", s.getClass().getSimpleName(), elapsedMs(start));
         } catch (IllegalArgumentException e) {
@@ -75,12 +77,22 @@ public final class Binder {
     }
 
     private void bindSelect(SelectStatement s) {
-        List<ColumnSpec> schema = engine.schema(s.tableName());
-        if (s.where().isEmpty())
+        bindWhere(s.tableName(), s.where());
+    }
+
+    /** A DELETE needs a table to delete from; whether it has rows is execution's business. */
+    private void bindDelete(DeleteStatement s) {
+        bindWhere(s.tableName(), s.where());
+    }
+
+    /** The table must exist, and a WHERE must name a column with a constant of its type. */
+    private void bindWhere(String tableName, java.util.Optional<Predicate> where) {
+        List<ColumnSpec> schema = engine.schema(tableName);
+        if (where.isEmpty())
             return;
 
-        Predicate predicate = s.where().get();
-        ColumnSpec column = columnOrThrow(schema, predicate.columnName(), s.tableName());
+        Predicate predicate = where.get();
+        ColumnSpec column = columnOrThrow(schema, predicate.columnName(), tableName);
         if (predicate.constant() == null)
             throw new IllegalArgumentException(
                     "constant must not be null for column " + column.name());

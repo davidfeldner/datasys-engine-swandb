@@ -66,6 +66,7 @@ public final class SqlParser {
 
         // Fully qualified on purpose: the generated parser shares this
         // class's simple name, so it cannot be imported.
+        // We use ANTLR's parser with ANTLR's lexer to initialize "our" parser
         dk.itu.swandb.sql.parser.SqlParser parser =
                 new dk.itu.swandb.sql.parser.SqlParser(new CommonTokenStream(lexer));
         parser.removeErrorListeners();
