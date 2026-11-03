@@ -81,6 +81,9 @@ class ScanOperatorTest {
         engine.createTable("trips", TRIPS_SCHEMA);
         Path csv = copyResource(tmp, "trips_sorted_by_distance.csv");
         engine.copyFile("trips", csv.toString());
+        // The catalog is written when the engine closes; likelier than not,
+        // this test reads the table before it closes, so ask for the write.
+        engine.close();
         return new Catalog(tmp.resolve("data")).getTable("trips");
     }
 

@@ -4,7 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dk.itu.swandb.ColumnSpec;
-import dk.itu.swandb.MinMax;
+import dk.itu.swandb.Pruning;
 import dk.itu.swandb.enums.Comparison;
 
 /**
@@ -64,12 +64,11 @@ public final class FilterOperator implements Operator {
                 column.name(), comparison, rowsIn, rowsOut);
     }
 
+    /**
+     * The row test, shared with {@code DELETE} through {@link Pruning} so a
+     * delete keeps exactly the rows this filter would emit.
+     */
     private boolean matches(Object value) {
-        int cmp = MinMax.compare(column.type(), constant, value);
-        return switch (comparison) {
-            case EQUALS -> cmp == 0;
-            case LESS_THAN -> cmp > 0;
-            case GREATER_THAN -> cmp < 0;
-        };
+        return Pruning.matches(comparison, constant, value, column.type());
     }
 }

@@ -6,5 +6,5 @@ package dk.itu.swandb.sql.ast;
  * so binding and, in week 4, execution are near-trivial mappings.
  */
 public sealed interface Statement
-        permits CreateTableStatement, CopyStatement, SelectStatement {
+        permits CreateTableStatement, CopyStatement, SelectStatement, DeleteStatement {
 }

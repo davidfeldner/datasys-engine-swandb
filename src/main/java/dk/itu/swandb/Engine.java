@@ -78,9 +78,12 @@ public final class Engine {
                 return 2;
             }
 
-            StorageEngine engine = new StorageEngine(dataDir, maxRowsPerPartition());
-            new Executor(engine).executeScript(sql,
-                    rows -> CsvWriter.writeRows(System.out, rows));
+            // try-with-resources: the catalog is written when the engine
+            // closes, whether the script succeeded or failed part way.
+            try (StorageEngine engine = new StorageEngine(dataDir, maxRowsPerPartition())) {
+                new Executor(engine).executeScript(sql,
+                        rows -> CsvWriter.writeRows(System.out, rows));
+            }
             return 0;
         } catch (RuntimeException | IOException e) {
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();

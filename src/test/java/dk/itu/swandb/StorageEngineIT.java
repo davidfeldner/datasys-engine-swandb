@@ -203,7 +203,9 @@ class StorageEngineIT {
         assertEquals(12L, aboveCopenhagen.get(0)[1]);
         assertEquals(23.5, aboveCopenhagen.get(0)[2]);
 
-        // The persisted min/max must reflect the preserved value too.
+        // The persisted min/max must reflect the preserved value too. The
+        // catalog is written when the engine closes, so close it first.
+        engine.close();
         Catalog.TableEntry table = new Catalog(tmp).getTable("trips");
         verifyPartitionMinMax(table.partitions.get(0), "city", "Aarhus", "Copenhagen ");
     }
@@ -246,7 +248,9 @@ class StorageEngineIT {
         Path csv = copyResource(tmp, "trips.csv");
         engine.copyFile("trips", csv.toString());
 
-        // 8 rows / 2 per partition = 4 partitions
+        // 8 rows / 2 per partition = 4 partitions. The catalog is written on
+        // close, which is when the in-memory versions are flushed.
+        engine.close();
         Path catalogFile = tmp.resolve(Catalog.CATALOG_FILE);
         String json = Files.readString(catalogFile);
         assertTrue(json.contains("\"rowCount\" : 2"));
@@ -325,6 +329,7 @@ class StorageEngineIT {
 
         // Partitions 0-2 hold distances [12,31], [88,95], [140,187]. Overwrite
         // the length prefix of their first column with -1 so decoding throws.
+        engine.close();
         Catalog.TableEntry table = new Catalog(tmp).getTable("trips");
         try (RandomAccessFile raf = new RandomAccessFile(tmp.resolve(table.dataFile).toFile(), "rw")) {
             for (int i = 0; i < 3; i++) {
@@ -357,7 +362,9 @@ class StorageEngineIT {
         Path csv = copyResource(tmp, "trips.csv");
         engine.copyFile("trips", csv.toString());
 
-        // Strip every "offset" field from the catalog, as an older writer would.
+        // Strip every "offset" field from the catalog, as an older writer
+        // would. Close first: the catalog is written on close.
+        engine.close();
         Path catalogFile = tmp.resolve(Catalog.CATALOG_FILE);
         ObjectMapper mapper = new ObjectMapper();
         JsonNode root = mapper.readTree(catalogFile.toFile());
@@ -385,6 +392,8 @@ class StorageEngineIT {
 
         List<Object[]> fromA = a.select("trips", "distance", Comparison.GREATER_THAN, -1L);
 
+        // A restart sees what the closing engine flushed to catalog.json.
+        a.close();
         StorageEngine b = new StorageEngine(tmp, 4);
         List<Object[]> fromB = b.select("trips", "distance", Comparison.GREATER_THAN, -1L);
 

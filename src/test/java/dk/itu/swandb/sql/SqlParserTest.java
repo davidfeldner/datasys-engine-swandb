@@ -15,6 +15,7 @@ import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.enums.Comparison;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
+import dk.itu.swandb.sql.ast.DeleteStatement;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -68,6 +69,50 @@ class SqlParserTest {
         List<Statement> statements = parser.parse("SELECT * FROM trips;");
 
         assertEquals(List.of(new SelectStatement("trips", Optional.empty())), statements);
+    }
+
+    @Test
+    void deleteWithWhereParsesToExpectedAst() {
+        List<Statement> statements = parser.parse("DELETE FROM trips WHERE distance > 100;");
+
+        assertEquals(List.of(new DeleteStatement("trips",
+                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)))), statements);
+    }
+
+    @Test
+    void deleteWithoutWhereParsesToExpectedAst() {
+        List<Statement> statements = parser.parse("DELETE FROM trips;");
+
+        assertEquals(List.of(new DeleteStatement("trips", Optional.empty())), statements);
+    }
+
+    @Test
+    void deleteKeywordsAreCaseInsensitiveAndIdentifierCaseSurvives() {
+        assertEquals(List.of(new DeleteStatement("Trips", Optional.empty())),
+                parser.parse("delete from Trips ;"));
+        assertEquals(new Predicate("Distance", Comparison.LESS_THAN, 5.5),
+                deleteOf("DeLeTe FrOm trips WhErE Distance < 5.5 ;").where().orElseThrow());
+    }
+
+    @Test
+    void aDeleteWithoutFromIsAReportedSyntaxError() {
+        SqlParseException e = parseFailure("DELETE trips;");
+
+        assertEquals(1, e.line());
+        assertEquals(7, e.column());
+    }
+
+    @Test
+    void aScriptMayMixDeleteWithTheOtherStatements() {
+        List<Statement> statements = parser.parse("""
+                CREATE TABLE trips (distance LONG);
+                COPY trips FROM 'trips.csv';
+                DELETE FROM trips WHERE distance = 0;
+                SELECT * FROM trips;
+                """);
+
+        assertEquals(4, statements.size());
+        assertInstanceOf(DeleteStatement.class, statements.get(2));
     }
 
     @Test
@@ -225,6 +270,11 @@ class SqlParserTest {
 
     private SqlParseException parseFailure(String sql) {
         return assertThrows(SqlParseException.class, () -> parser.parse(sql), sql);
+    }
+
+    private DeleteStatement deleteOf(String sql) {
+        List<Statement> statements = parser.parse(sql);
+        return assertInstanceOf(DeleteStatement.class, statements.get(0), sql);
     }
 
     private Predicate predicateOf(String sql) {

@@ -40,8 +40,15 @@ only safe outcome.
 `StorageEngine.select(table, column, comparison, constant)` keeps its exact
 week 2 signature and now plans and drains that pipeline internally;
 `StorageEngine.selectAll(table)` is the unfiltered sibling the front door
-needs for `SELECT * FROM table;`. `ScanStats` is taken from the `Plan` and is
-still available through `lastScanStats()`.
+needs for `SELECT * FROM table;`. `ScanStats` is taken from the `Plan`; the
+figures of the last select are available through `lastReadVersion()`,
+`lastPartitionsRead()` and `lastPartitionsPruned()`.
+
+Since Exercise 7 the planner no longer reads the catalog itself: it is handed
+`(columns, partitions, dataPath)` of the version the statement pinned, so a
+running statement cannot see a commit that lands underneath it. The pruning
+decision moved into `Pruning.decide`, which `DELETE` reads in the opposite
+direction to compute its rewrite set (`docs/transactions-design.md`).
 
 The decision log lines moved with the decision: they are now emitted by
 `Planner` (`className = Planner`) and are written before any data file is

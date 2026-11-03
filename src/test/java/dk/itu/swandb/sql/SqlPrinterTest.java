@@ -43,6 +43,23 @@ class SqlPrinterTest {
     }
 
     @Test
+    void deleteRoundTripsWithAndWithoutWhere() {
+        assertRoundTrips(one("DELETE FROM trips;"));
+        assertRoundTrips(one("DELETE FROM trips WHERE distance > 100;"));
+        assertRoundTrips(one("DELETE FROM trips WHERE city = 'Odense';"));
+        assertRoundTrips(one("DELETE FROM trips WHERE price < -1.5;"));
+        assertRoundTrips(one("DELETE FROM trips WHERE city = '';"));
+    }
+
+    @Test
+    void printingNormalizesDelete() {
+        assertEquals("DELETE FROM Trips WHERE City = 'Odense';",
+                printer.print(one("delete from Trips where City = 'Odense' ;")));
+        assertEquals("DELETE FROM trips;",
+                printer.print(one("delete from trips -- everything\n;")));
+    }
+
+    @Test
     void everyLiteralTypeRoundTrips() {
         assertRoundTrips(one("SELECT * FROM trips WHERE distance > 12;"));
         assertRoundTrips(one("SELECT * FROM trips WHERE price > 12.0;"));

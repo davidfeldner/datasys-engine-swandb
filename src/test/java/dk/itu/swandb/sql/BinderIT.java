@@ -124,6 +124,72 @@ class BinderIT {
     }
 
     @Test
+    void deleteBindsWithAndWithoutWhere(@TempDir Path tmp) {
+        StorageEngine engine = engineWithTrips(tmp);
+
+        assertDoesNotThrow(() -> bindScript(engine, """
+                DELETE FROM trips;
+                DELETE FROM trips WHERE distance > 100;
+                DELETE FROM trips WHERE city = 'Odense';
+                DELETE FROM trips WHERE price < 50.0;
+                """));
+    }
+
+    @Test
+    void deleteOfAnUnknownTableThrows(@TempDir Path tmp) {
+        StorageEngine engine = engineWithTrips(tmp);
+
+        IllegalArgumentException e = bindFailure(engine, "DELETE FROM missing;");
+        assertTrue(e.getMessage().contains("unknown table: missing"), e.getMessage());
+    }
+
+    @Test
+    void deleteWithAnUnknownColumnThrows(@TempDir Path tmp) {
+        StorageEngine engine = engineWithTrips(tmp);
+
+        IllegalArgumentException e = bindFailure(engine, "DELETE FROM trips WHERE nope > 1;");
+        assertTrue(e.getMessage().contains("unknown column: nope"), e.getMessage());
+    }
+
+    @Test
+    void deleteWithAMistypedConstantThrows(@TempDir Path tmp) {
+        StorageEngine engine = engineWithTrips(tmp);
+
+        IllegalArgumentException stringForLong =
+                bindFailure(engine, "DELETE FROM trips WHERE distance = 'x';");
+        assertTrue(stringForLong.getMessage().contains("expected LONG got String"),
+                stringForLong.getMessage());
+
+        IllegalArgumentException longForString =
+                bindFailure(engine, "DELETE FROM trips WHERE city = 1;");
+        assertTrue(longForString.getMessage().contains("expected STRING got Long"),
+                longForString.getMessage());
+
+        IllegalArgumentException longForDouble =
+                bindFailure(engine, "DELETE FROM trips WHERE price = 1;");
+        assertTrue(longForDouble.getMessage().contains("expected DOUBLE got Long"),
+                longForDouble.getMessage());
+    }
+
+    @Test
+    void deleteBindsLikeSelectAgainstTheSameWhere(@TempDir Path tmp) {
+        StorageEngine engine = engineWithTrips(tmp);
+
+        // The same predicate must be accepted by both statements, because
+        // they share one binder path, or rejected by both.
+        for (String where : List.of("distance > 100", "city = 'Odense'", "price < 50.0")) {
+            assertDoesNotThrow(() -> bindScript(engine, "SELECT * FROM trips WHERE " + where + ";"));
+            assertDoesNotThrow(() -> bindScript(engine, "DELETE FROM trips WHERE " + where + ";"));
+        }
+        for (String where : List.of("distance = 'x'", "nope > 1")) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> bindScript(engine, "SELECT * FROM trips WHERE " + where + ";"), where);
+            assertThrows(IllegalArgumentException.class,
+                    () -> bindScript(engine, "DELETE FROM trips WHERE " + where + ";"), where);
+        }
+    }
+
+    @Test
     void duplicateAndEmptyColumnListsThrow(@TempDir Path tmp) {
         StorageEngine engine = engineWithTrips(tmp);
 

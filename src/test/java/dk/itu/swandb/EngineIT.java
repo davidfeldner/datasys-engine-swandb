@@ -10,9 +10,12 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
@@ -138,6 +141,105 @@ class EngineIT {
                 .toList();
         assertFalse(lifecycle.isEmpty());
         assertEquals("0", lifecycle.get(lifecycle.size() - 1).split(",", -1)[2]);
+    }
+
+    /**
+     * Required test of Exercise 7: one script with CREATE, COPY, COPY, DELETE
+     * and SELECT runs through the front door and returns the rows the two
+     * COPY statements loaded minus the ones the DELETE removed.
+     */
+    @Test
+    void deleteThroughTheFrontDoorReturnsTheCopiesMinusTheDeletedRows(@TempDir Path tmp) throws Exception {
+        Path csv = copyResource(tmp, "trips.csv");
+        Path script = tmp.resolve("dml.sql");
+        Files.writeString(script, """
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM '%s';
+                COPY trips FROM '%s';
+                DELETE FROM trips WHERE city = 'Copenhagen';
+                SELECT * FROM trips;
+                """.formatted(csv, csv));
+
+        Capture capture = run(new String[]{"-f", script.toString()}, tmp);
+
+        assertEquals(0, capture.exitCode(), capture.stderr());
+        // 16 loaded rows minus the 3 Copenhagen rows in each load.
+        List<String> lines = capture.stdout().lines().toList();
+        assertEquals(10, lines.size(), capture.stdout());
+        assertFalse(capture.stdout().contains("Copenhagen"), capture.stdout());
+        // Order is preserved: the surviving rows of the first load, then the second.
+        assertEquals(List.of(
+                "Aarhus,187,301.0",
+                "Odense,95,120.75",
+                "Aalborg,210,340.5",
+                "Roskilde,31,45.0",
+                "Esbjerg,299,450.25",
+                "Aarhus,187,301.0",
+                "Odense,95,120.75",
+                "Aalborg,210,340.5",
+                "Roskilde,31,45.0",
+                "Esbjerg,299,450.25"), lines);
+    }
+
+    @Test
+    void deleteWithoutWhereEmptiesTheTableThroughTheFrontDoor(@TempDir Path tmp) throws Exception {
+        Path csv = copyResource(tmp, "trips.csv");
+        Path script = tmp.resolve("truncate.sql");
+        Files.writeString(script, """
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM '%s';
+                DELETE FROM trips;
+                SELECT * FROM trips;
+                """.formatted(csv));
+
+        Capture capture = run(new String[]{"-f", script.toString()}, tmp);
+
+        assertEquals(0, capture.exitCode(), capture.stderr());
+        assertEquals("", capture.stdout(), "the table is empty and DELETE printed nothing");
+    }
+
+    /**
+     * Every statement's summary line carries the version it committed or read,
+     * in the form the exercise fixes.
+     */
+    @Test
+    void everySummaryLineReportsItsVersion(@TempDir Path tmp) throws Exception {
+        String tag = UUID.randomUUID().toString().replace("-", "");
+        String table = "t" + tag;
+        Path csv = copyResource(tmp, "trips.csv");
+        Path script = tmp.resolve("versions-" + tag + ".sql");
+        Files.writeString(script, """
+                CREATE TABLE %s (city STRING, distance LONG, price DOUBLE);
+                COPY %s FROM '%s';
+                COPY %s FROM '%s';
+                DELETE FROM %s WHERE city = 'Copenhagen';
+                SELECT * FROM %s;
+                """.formatted(table, table, csv, table, csv, table, table));
+
+        assertEquals(0, run(new String[]{"-f", script.toString()}, tmp).exitCode());
+
+        // The executor's summary lines are the ones whose message starts with
+        // statement=KIND and carries a version.
+        String summary = "statement=(CREATE|COPY|DELETE|SELECT) table=.*version=\\d+.*";
+        List<String> messages = Files.readAllLines(Path.of("logs", "engine.log")).stream()
+                .filter(line -> line.contains(table))
+                .filter(line -> line.split(",", -1)[5].equals("Executor"))
+                .map(line -> line.split(",", -1)[6])
+                .filter(message -> message.matches(summary))
+                .toList();
+        assertFalse(messages.isEmpty(), "expected summary lines for " + table);
+
+        List<String> kinds = new ArrayList<>();
+        List<Integer> versions = new ArrayList<>();
+        Pattern versionField = Pattern.compile("version=(\\d+)");
+        for (String message : messages) {
+            kinds.add(message.substring("statement=".length(), message.indexOf(' ')));
+            Matcher m = versionField.matcher(message);
+            assertTrue(m.find(), message);
+            versions.add(Integer.parseInt(m.group(1)));
+        }
+        assertEquals(List.of("CREATE", "COPY", "COPY", "DELETE", "SELECT"), kinds, messages.toString());
+        assertEquals(List.of(0, 1, 2, 3, 3), versions, messages.toString());
     }
 
     private static Path scriptWith(Path tmp, Path csv, String sql) throws Exception {

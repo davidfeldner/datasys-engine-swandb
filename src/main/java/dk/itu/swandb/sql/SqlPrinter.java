@@ -6,6 +6,7 @@ import java.util.StringJoiner;
 import dk.itu.swandb.ColumnSpec;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
+import dk.itu.swandb.sql.ast.DeleteStatement;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -26,6 +27,7 @@ public final class SqlPrinter {
             case CreateTableStatement createTable -> printCreateTable(createTable);
             case CopyStatement copy -> printCopy(copy);
             case SelectStatement select -> printSelect(select);
+            case DeleteStatement delete -> printDelete(delete);
         };
     }
 
@@ -49,6 +51,12 @@ public final class SqlPrinter {
 
     private static String printSelect(SelectStatement s) {
         String sql = "SELECT * FROM " + s.tableName();
+        if (s.where().isPresent()) sql += " WHERE " + printPredicate(s.where().get());
+        return sql + ";";
+    }
+
+    private static String printDelete(DeleteStatement s) {
+        String sql = "DELETE FROM " + s.tableName();
         if (s.where().isPresent()) sql += " WHERE " + printPredicate(s.where().get());
         return sql + ";";
     }
