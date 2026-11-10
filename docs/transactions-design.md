@@ -25,9 +25,9 @@ atomically.
 
 In one JVM: the sink is `versions.putIfAbsent(base + 1, next)` on the table's
 `ConcurrentHashMap`, followed by one reference assignment that publishes the
-new version as newest. One script has one writer, so the CAS always succeeds
-today; the same operation is what makes the loser lose when week 8 races two
-writers.
+new version as newest. Since Exercise 8 the sink validates `base` first, so of
+two writers racing from the same base only the first committer swaps its
+version in; the other throws `ConflictException`.
 
 On disk: `catalog.json` is written to `catalog.json.tmp` and renamed over
 `catalog.json` (`ATOMIC_MOVE`, falling back to a plain replace where the
@@ -38,6 +38,33 @@ New partitions are written to the table's data file *before* the swap. A crash
 between the write and the swap leaves partitions no catalog entry points at:
 invisible and harmless, and reclaimed by the next commit (see *Retention*).
 
+# Conflict detection
+A DML statement records the version it pinned at start as its base. At commit
+it validates that base against the table's current committed version:
+
+- Equal: no one committed in between. Write the new partitions, swap, increment
+  the version, persist the catalog.
+- Moved: someone else won. Throw `ConflictException`, a `RuntimeException` whose
+  message is the conflict line `conflict table=trips base=3 current=4`. The
+  statement leaves no visible change, because its partition list is never
+  swapped in.
+
+Validation, the append of the new partitions, the swap and the in-memory
+catalog update run in one critical section per table, the commit lock in
+`StorageEngine`. The append is inside that section because a table has one data
+file: writers must not truncate and append over each other. A loser validates
+before it writes, so it writes nothing and leaves no orphan behind; bytes left
+by an aborted write are still reclaimed by the next commit's truncation to
+`liveEnd`.
+
+`StorageEngine.beforeCommit` is the test seam: a package-private `Runnable`
+that is a no-op in production and that a test uses to park a writer right
+before validation. Combined with two latches it forces the interleaving
+deterministically, with no sleeps. A snapshot read needs no threads at all:
+`StorageEngine.openQuery` returns a `PinnedQuery` whose plan carries the pinned
+partitions with their offsets and counts, so a `DELETE` can run a whole
+statement between opening and draining the scan without changing its rows.
+
 # Snapshot
 A statement pins the version it reads when it starts and never re-reads
 metadata.
@@ -46,8 +73,8 @@ What it pins: a reference to a version (`PinnedVersion`), not a copy of the
 partition list. Versions are immutable, and commits only ever append to the
 data file, so a pinned list stays valid for as long as the pin is held.
 
-When: in `StorageEngine.select`/`delete`, before the plan is built. The planner
-is handed the pinned schema and partition list (`new Planner(columns,
+When: in `StorageEngine.openQuery`/`select`/`delete`, before the plan is built.
+The planner is handed the pinned schema and partition list (`new Planner(columns,
 partitions, dataPath)`) rather than the catalog, so there is nothing left for it
 to re-read. `PinnedVersion.close()` in a `finally` releases the pin.
 
@@ -158,8 +185,8 @@ stdout stays reserved for SELECT rows; DELETE prints nothing.
    and a second engine started on the same directory sees a stale table. The
    on-disk half of a commit would be one atomic rename of a file that is a few
    hundred bytes. `StorageEngine.persist()` exists so a test or a caller can
-   force the write; we suggest calling it per commit before week 8, when two
-   writers make a stale catalog much harder to reason about.
+   force the write; we still write the catalog only on close, which Exercise 8
+   leaves unchanged because conflict detection happens entirely in memory.
 
 2. **The single data file plus truncation is the riskiest part of this
    design.** Truncating to `liveEnd` on every commit means a commit mutates a
@@ -186,10 +213,13 @@ stdout stays reserved for SELECT rows; DELETE prints nothing.
    raw `IllegalStateException("truncated file")`. A readable error naming the
    table, version and offset would make that failure diagnosable.
 
-6. **Concurrency is unexercised.** The `putIfAbsent` sink and the per-table
-   commit lock are in place, but every test drives one writer, so the loser's
-   path in `commit()` (`return -1`) is dead code. Week 8 should cover it; until
-   then it is untested behaviour rather than working behaviour.
+6. **Concurrency is exercised, the extension is not.** Exercise 8's conflict
+   detection covers the loser's path: `VersionedTable.commit` validates the base
+   under the per-table commit lock and throws `ConflictException`, and
+   `ConflictIT` forces the two-writer interleavings on latches. The optional
+   rebase strategy (letting a loser commit disjoint partitions on top of the
+   winner) is deliberately not implemented: two writers from the same base
+   always conflict, first committer wins.
 
 7. **Orphan cleanup is implicit.** The exercise asks how we would find orphaned
    partitions. We do not search for them: every commit truncates anything past

@@ -4,7 +4,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dk.itu.swandb.enums.Comparison;
-import dk.itu.swandb.plan.Operator;
 import dk.itu.swandb.plan.Plan;
 import dk.itu.swandb.plan.Planner;
 import dk.itu.swandb.plan.Selection;
@@ -29,9 +28,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Since Exercise 7 every table is versioned ({@link VersionedTable}).
  * No partition is ever modified in place: {@code COPY} and {@code DELETE}
  * write their new partitions at the end of the table's data file and commit
- * the new partition list and version in one atomic swap. The catalog file
- * is written when the engine closes ({@link #close()}), and by nothing else
- * after {@code CREATE TABLE}.
+ * the new partition list and version in one atomic swap. Since Exercise 8 the
+ * swap validates the writer's base first, so two writers racing from the same
+ * version cannot both commit; the loser throws {@link ConflictException}.
+ * The catalog file is written when the engine closes ({@link #close()}), and
+ * by nothing else after {@code CREATE TABLE}.
  */
 public final class StorageEngine implements AutoCloseable {
 
@@ -51,6 +52,14 @@ public final class StorageEngine implements AutoCloseable {
     private volatile int lastPartitionsPruned;
     /** Serialises a table's commits: write the new partitions, then swap. */
     private final Map<String, Object> commitLocks = new ConcurrentHashMap<>();
+
+    /**
+     * Runs before a commit's validation. Production never touches it; a test
+     * parks a writer here. Package-private and a no-op by default, so forcing
+     * the two-writer interleaving costs production nothing and needs no
+     * sleeps (Exercise 8).
+     */
+    Runnable beforeCommit = () -> { };
 
     /** Open (or create) an engine rooted at {@code dataDirectory}. */
     public StorageEngine(Path dataDirectory) {
@@ -137,6 +146,10 @@ public final class StorageEngine implements AutoCloseable {
      * are appended after the partitions every live version still needs, and
      * the new partition list is committed once it is written. A second COPY
      * into a table with data simply appends more partitions.
+     *
+     * <p>The statement pins the newest version when it starts and commits on
+     * top of that base. If another writer committed in between, validation
+     * fails with {@link ConflictException} and this COPY writes nothing.
      */
     public Result copyFile(String tableName, String csvFilePath) {
         long start = System.nanoTime();
@@ -159,13 +172,21 @@ public final class StorageEngine implements AutoCloseable {
             newEntries.add(summarize(columns, slice, newEntries.size(), -1));
         }
 
+        VersionedTable table = versioned(tableName);
         int version;
-        synchronized (lock(tableName)) {
-            VersionedTable table = versioned(tableName);
-            listPartitions(newEntries, partitions, table, entry, columns);
-            List<Catalog.PartitionEntry> next = new ArrayList<>(table.newest().partitions());
+        try (VersionedTable.PinnedVersion pinned = table.begin()) {
+            int base = pinned.number();
+            List<Catalog.PartitionEntry> next = new ArrayList<>(pinned.partitions());
             next.addAll(newEntries);
-            version = commit(table, next, entry, tableName);
+            beforeCommit.run();
+            synchronized (lock(tableName)) {
+                // Validate before writing: a loser writes nothing, so it leaves
+                // no orphan behind, and the append sees the newest version.
+                table.validate(base);
+                listPartitions(newEntries, partitions, table, base + 1, entry, columns);
+                reindex(next);
+                version = commit(table, base, next);
+            }
         }
 
         long durationMs = (System.nanoTime() - start) / 1_000_000L;
@@ -185,6 +206,10 @@ public final class StorageEngine implements AutoCloseable {
      * file; a partition that cannot match is carried over untouched. If
      * nothing matches, nothing is written and no version is created: the
      * table stays at the version it was at.
+     *
+     * <p>The statement pins the newest version when it starts and commits on
+     * top of that base. If another writer committed in between, validation
+     * fails with {@link ConflictException} and this DELETE writes nothing.
      */
     public Result delete(String tableName, Optional<Selection> where) {
         long start = System.nanoTime();
@@ -197,61 +222,65 @@ public final class StorageEngine implements AutoCloseable {
 
         int version;
         int deleted = 0;
-        List<SwanFile.Partition> rewrittenBodies = new ArrayList<>();
-        List<Catalog.PartitionEntry> rewriteEntries = new ArrayList<>();
         int carried = 0;
         int rewritten = 0;
-        synchronized (lock(tableName)) {
-            VersionedTable table = versioned(tableName);
-            try (VersionedTable.PinnedVersion pinned = table.begin()) {
-                List<Catalog.PartitionEntry> base = pinned.partitions();
-                // Parallel to base: the partition to carry at each position, or
-                // null when that position is rewritten or dropped.
-                List<Catalog.PartitionEntry> next = new ArrayList<>(base.size());
-                // For each rewrite that produces a new partition, the
-                // position in next it replaces.
-                List<Integer> rewriteSlots = new ArrayList<>();
-                for (Catalog.PartitionEntry partition : base) {
-                    if (where.isPresent() && cannotMatch(partition, where.get(), where.get().columnName(), filterColumn)) {
-                        next.add(partition);
-                        carried++;
-                        continue;
-                    }
-                    List<Object[]> kept = new ArrayList<>();
-                    for (Object[] row : readRows(tableName, partition, columns)) {
-                        // Without a WHERE every row matches: that is the
-                        // "DELETE FROM table;" that empties the table.
-                        boolean matches = where.isEmpty()
-                                || Pruning.matches(where.get().comparison(),
-                                        where.get().constant(), row[columnIndex], filterColumn.type());
-                        if (matches) {
-                            deleted++;
-                        } else {
-                            kept.add(row);
-                        }
-                    }
-                    if (kept.size() == partition.rowCount()) {
-                        // May match, but holds nothing to remove: carry it over.
-                        next.add(partition);
-                        carried++;
-                    } else if (kept.isEmpty()) {
-                        // Every row matched: a rewrite that produces no
-                        // partition, so nothing is written for it.
-                        rewritten++;
-                        next.add(null);
+        VersionedTable table = versioned(tableName);
+        try (VersionedTable.PinnedVersion pinned = table.begin()) {
+            int base = pinned.number();
+            // Parallel to the base list: the partition to carry at each
+            // position, or null when that position is rewritten or dropped.
+            List<Catalog.PartitionEntry> next = new ArrayList<>(pinned.partitions().size());
+            // For each rewrite that produces a new partition, the position in
+            // next it replaces.
+            List<Integer> rewriteSlots = new ArrayList<>();
+            List<SwanFile.Partition> rewrittenBodies = new ArrayList<>();
+            List<Catalog.PartitionEntry> rewriteEntries = new ArrayList<>();
+            for (Catalog.PartitionEntry partition : pinned.partitions()) {
+                if (where.isPresent() && cannotMatch(partition, where.get(), where.get().columnName(), filterColumn)) {
+                    next.add(partition);
+                    carried++;
+                    continue;
+                }
+                List<Object[]> kept = new ArrayList<>();
+                for (Object[] row : readRows(tableName, partition, columns)) {
+                    // Without a WHERE every row matches: that is the
+                    // "DELETE FROM table;" that empties the table.
+                    boolean matches = where.isEmpty()
+                            || Pruning.matches(where.get().comparison(),
+                                    where.get().constant(), row[columnIndex], filterColumn.type());
+                    if (matches) {
+                        deleted++;
                     } else {
-                        rewriteSlots.add(next.size());
-                        rewritten++;
-                        rewrittenBodies.add(buildPartition(columns, kept));
-                        rewriteEntries.add(summarize(columns, kept, rewriteEntries.size(), -1));
-                        next.add(null);
+                        kept.add(row);
                     }
                 }
-
-                if (deleted == 0) {
-                    version = pinned.number();
+                if (kept.size() == partition.rowCount()) {
+                    // May match, but holds nothing to remove: carry it over.
+                    next.add(partition);
+                    carried++;
+                } else if (kept.isEmpty()) {
+                    // Every row matched: a rewrite that produces no
+                    // partition, so nothing is written for it.
+                    rewritten++;
+                    next.add(null);
                 } else {
-                    listPartitions(rewriteEntries, rewrittenBodies, table, entry, columns);
+                    rewriteSlots.add(next.size());
+                    rewritten++;
+                    rewrittenBodies.add(buildPartition(columns, kept));
+                    rewriteEntries.add(summarize(columns, kept, rewriteEntries.size(), -1));
+                    next.add(null);
+                }
+            }
+
+            if (deleted == 0) {
+                version = base;
+            } else {
+                beforeCommit.run();
+                synchronized (lock(tableName)) {
+                    // Validate before writing: a loser writes nothing, so it
+                    // leaves no orphan behind.
+                    table.validate(base);
+                    listPartitions(rewriteEntries, rewrittenBodies, table, base + 1, entry, columns);
                     for (int r = 0; r < rewriteSlots.size(); r++) {
                         next.set(rewriteSlots.get(r), rewriteEntries.get(r));
                     }
@@ -261,7 +290,7 @@ public final class StorageEngine implements AutoCloseable {
                         if (p != null) committed.add(p);
                     }
                     reindex(committed);
-                    version = commit(table, committed, entry, tableName);
+                    version = commit(table, base, committed);
                 }
             }
         }
@@ -279,21 +308,37 @@ public final class StorageEngine implements AutoCloseable {
      */
     public List<Object[]> select(String tableName, Optional<Selection> where) {
         long start = System.nanoTime();
-        Catalog.TableEntry entry = entry(tableName);
-        VersionedTable table = versioned(tableName);
-        try (VersionedTable.PinnedVersion pinned = table.begin()) {
-            Plan plan = new Planner(entry.columns, pinned.partitions(), dataDir.resolve(entry.dataFile))
-                    .plan(tableName, where);
-            List<Object[]> out = drain(plan.root());
-            lastReadVersion = pinned.number();
-            lastPartitionsRead = plan.stats().partitionsRead();
-            lastPartitionsPruned = plan.stats().partitionsPruned();
+        try (PinnedQuery query = openQuery(tableName, where)) {
+            List<Object[]> out = query.drain();
+            lastReadVersion = query.version();
+            lastPartitionsRead = query.stats().partitionsRead();
+            lastPartitionsPruned = query.stats().partitionsPruned();
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug(
                     "table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                    LogFormat.sanitize(tableName), out.size(), plan.stats().partitionsRead(),
-                    plan.stats().partitionsPruned(), pinned.number(), durationMs);
+                    LogFormat.sanitize(tableName), out.size(), query.stats().partitionsRead(),
+                    query.stats().partitionsPruned(), query.version(), durationMs);
             return out;
+        }
+    }
+
+    /**
+     * Opens a scan on the newest committed version and pins it until the
+     * returned query is closed. The plan is built from the pinned partition
+     * list, so the scan carries its snapshot's partitions, offsets and counts:
+     * a commit that lands between opening and draining changes neither the
+     * plan nor the rows it reads.
+     */
+    public PinnedQuery openQuery(String tableName, Optional<Selection> where) {
+        Catalog.TableEntry entry = entry(tableName);
+        VersionedTable.PinnedVersion pinned = versioned(tableName).begin();
+        try {
+            Plan plan = new Planner(entry.columns, pinned.partitions(), dataDir.resolve(entry.dataFile))
+                    .plan(tableName, where);
+            return new PinnedQuery(pinned, plan);
+        } catch (RuntimeException e) {
+            pinned.close();
+            throw e;
         }
     }
 
@@ -355,28 +400,27 @@ public final class StorageEngine implements AutoCloseable {
     // --- versioned commit ----------------------------------------------
 
     /**
-     * Commits {@code next} as the table's next version and makes it the one
-     * the catalog will persist. The caller holds the table's commit lock.
+     * Commits {@code next} on top of the validated {@code base} and makes it
+     * the version the catalog will persist. The caller holds the table's
+     * commit lock, so no other writer can slip in between the validation and
+     * this swap.
      */
-    private int commit(VersionedTable table, List<Catalog.PartitionEntry> next,
-                       Catalog.TableEntry entry, String tableName) {
-        int version = table.commit(table.newestNumber(), next);
-        if (version < 0)
-            throw new IllegalStateException("table " + tableName + " changed while its commit was prepared");
+    private int commit(VersionedTable table, int base, List<Catalog.PartitionEntry> next) {
+        int version = table.commit(base, next);
         persist(table);
         return version;
     }
 
     /**
-     * Appends the written partitions at the end of the data file, then gives
-     * each its final offset and index. Truncating back to {@link
+     * Appends the written partitions at the end of the data file and gives
+     * each its final offset and version. Truncating back to {@link
      * VersionedTable#liveEnd} first is what reclaims the bytes of versions
      * that expired and of commits that never happened.
      */
     private void listPartitions(List<Catalog.PartitionEntry> entries, List<SwanFile.Partition> bodies,
-                                VersionedTable table, Catalog.TableEntry entry, List<ColumnSpec> columns) {
+                                VersionedTable table, int version, Catalog.TableEntry entry,
+                                List<ColumnSpec> columns) {
         if (bodies.isEmpty()) return;
-        int version = table.newestNumber() + 1;
         for (Catalog.PartitionEntry e : entries) e.version = version;
         Path dataPath = dataDir.resolve(entry.dataFile);
         long metadataEnd = SwanFile.metadataBytes(columns.size());
@@ -553,18 +597,5 @@ public final class StorageEngine implements AutoCloseable {
         Catalog.PartitionEntry entry = new Catalog.PartitionEntry(index, rows.size(), summaries);
         entry.offset = offset;
         return entry;
-    }
-
-    /** Drains an operator tree, always closing what it opened. */
-    private static List<Object[]> drain(Operator root) {
-        List<Object[]> out = new ArrayList<>();
-        root.open();
-        try {
-            Object[] row;
-            while ((row = root.next()) != null) out.add(row);
-        } finally {
-            root.close();
-        }
-        return out;
     }
 }
