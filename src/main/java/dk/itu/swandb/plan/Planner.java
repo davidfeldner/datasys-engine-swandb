@@ -90,7 +90,7 @@ public final class Planner {
             List<Operator> pipelines = new ArrayList<>(tables.size());
             ScanStats total = new ScanStats(0, 0, 0);
             for (int i = 0; i < tables.size(); i++) {
-                TablePlan tablePlan = planTable(tables.get(i), filtersByTable.get(i));
+                Plan tablePlan = planTable(tables.get(i), filtersByTable.get(i));
                 pipelines.add(tablePlan.root());
                 total = total.plus(tablePlan.stats());
             }
@@ -131,7 +131,7 @@ public final class Planner {
      * A partition is pruned as soon as any filter on this table proves it
      * free, because all filters are ANDed together.
      */
-    private static TablePlan planTable(TableInput table, List<BoundFilter> filters) {
+    private static Plan planTable(TableInput table, List<BoundFilter> filters) {
         List<Catalog.PartitionEntry> survivors = new ArrayList<>();
         int pruned = 0;
         for (Catalog.PartitionEntry partition : table.partitions()) {
@@ -176,7 +176,7 @@ public final class Planner {
         LOGGER.debug("table={} filters={} partitionsTotal={} partitionsRead={} partitionsPruned={}",
                 LogFormat.sanitize(table.tableName()), filters.size(), stats.partitionsTotal(),
                 stats.partitionsRead(), stats.partitionsPruned());
-        return new TablePlan(root, stats);
+        return new Plan(root, stats);
     }
 
     /**
@@ -220,9 +220,6 @@ public final class Planner {
 
 
     private record BoundFilter(Selection selection, ResolvedColumn column) {
-    }
-
-    private record TablePlan(Operator root, ScanStats stats) {
     }
 
     private record JoinKey(int buildKey, int probeKey) {

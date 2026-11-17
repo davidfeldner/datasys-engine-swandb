@@ -110,13 +110,9 @@ public final class Executor {
                 yield Result.selected(engine.lastReadVersion(), rows,
                         engine.lastPartitionsRead(), engine.lastPartitionsPruned());
             }
-            case DeleteStatement delete -> engine.delete(delete.tableName(), selection(delete.where()));
+            case DeleteStatement delete ->
+                    engine.delete(delete.tableName(), delete.where().map(Executor::selection));
         };
-    }
-
-    /** The AST's optional predicate as the storage-level selection. */
-    private static java.util.Optional<Selection> selection(java.util.Optional<Predicate> where) {
-        return where.map(Executor::selection);
     }
 
     private static Selection selection(Predicate predicate) {

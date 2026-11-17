@@ -216,10 +216,11 @@ public final class StorageEngine implements AutoCloseable {
         long start = System.nanoTime();
         List<ColumnSpec> columns = schema(tableName);
         Catalog.TableEntry entry = entry(tableName);
-        int columnIndex = where.isEmpty() ? -1 : columnIndex(columns, where.get().columnName());
+        Selection selection = where.orElse(null);
+        int columnIndex = selection == null ? -1 : columnIndex(columns, selection.columnName());
         ColumnSpec filterColumn = columnIndex < 0 ? null : columns.get(columnIndex);
         if (filterColumn != null)
-            filterColumn.requireConstant(where.get().constant());
+            filterColumn.requireConstant(selection.constant());
 
         int version;
         int deleted = 0;
@@ -237,7 +238,7 @@ public final class StorageEngine implements AutoCloseable {
             List<SwanFile.Partition> rewrittenBodies = new ArrayList<>();
             List<Catalog.PartitionEntry> rewriteEntries = new ArrayList<>();
             for (Catalog.PartitionEntry partition : pinned.partitions()) {
-                if (where.isPresent() && cannotMatch(partition, where.get(), where.get().columnName(), filterColumn)) {
+                if (selection != null && cannotMatch(partition, selection, filterColumn)) {
                     next.add(partition);
                     carried++;
                     continue;
@@ -246,9 +247,9 @@ public final class StorageEngine implements AutoCloseable {
                 for (Object[] row : readRows(tableName, partition, columns)) {
                     // Without a WHERE every row matches: that is the
                     // "DELETE FROM table;" that empties the table.
-                    boolean matches = where.isEmpty()
-                            || Pruning.matches(where.get().comparison(),
-                                    where.get().constant(), row[columnIndex], filterColumn.type());
+                    boolean matches = selection == null
+                            || Pruning.matches(selection.comparison(),
+                                    selection.constant(), row[columnIndex], filterColumn.type());
                     if (matches) {
                         deleted++;
                     } else {
@@ -556,7 +557,8 @@ public final class StorageEngine implements AutoCloseable {
      * the planner's pruning decision: this is the one decision both use.
      */
     private static boolean cannotMatch(Catalog.PartitionEntry partition, Selection selection,
-                                       String columnName, ColumnSpec column) {
+                                       ColumnSpec column) {
+        String columnName = selection.columnName();
         Catalog.ColumnSummary summary = partition.summary(columnName);
         if (summary == null || summary.min() == null || summary.max() == null)
             throw new IllegalStateException("missing min/max summary for column " + columnName
