@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dk.itu.swandb.enums.Comparison;
+import dk.itu.swandb.plan.JoinCondition;
 import dk.itu.swandb.plan.Plan;
 import dk.itu.swandb.plan.Planner;
 import dk.itu.swandb.plan.Selection;
@@ -96,12 +97,12 @@ public final class StorageEngine implements AutoCloseable {
         long start = System.nanoTime();
         try {
             List<ColumnSpec> columns = List.copyOf(entry(tableName).columns);
-            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            long durationMs = LogFormat.elapsedMs(start);
             LOGGER.debug("table={} columns={} durationMs={}",
                     LogFormat.sanitize(tableName), columns.size(), durationMs);
             return columns;
         } catch (RuntimeException e) {
-            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            long durationMs = LogFormat.elapsedMs(start);
             LOGGER.debug("table={} error={} durationMs={}",
                     LogFormat.sanitize(tableName), e.getClass().getSimpleName(), durationMs);
             throw e;
@@ -134,7 +135,7 @@ public final class StorageEngine implements AutoCloseable {
         tables.put(tableName, VersionedTable.empty(tableName));
         catalog.save();
 
-        long durationMs = (System.nanoTime() - start) / 1_000_000L;
+        long durationMs = LogFormat.elapsedMs(start);
         LOGGER.debug("table={} columns={} version={} durationMs={}",
                 LogFormat.sanitize(tableName), columns.size(), 0, durationMs);
         return Result.created(0);
@@ -189,7 +190,7 @@ public final class StorageEngine implements AutoCloseable {
             }
         }
 
-        long durationMs = (System.nanoTime() - start) / 1_000_000L;
+        long durationMs = LogFormat.elapsedMs(start);
         LOGGER.debug("table={} file={} rows={} partitions={} version={} durationMs={}",
                 LogFormat.sanitize(tableName), LogFormat.sanitize(csvFilePath), rows.size(),
                 partitions.size(), version, durationMs);
@@ -215,10 +216,11 @@ public final class StorageEngine implements AutoCloseable {
         long start = System.nanoTime();
         List<ColumnSpec> columns = schema(tableName);
         Catalog.TableEntry entry = entry(tableName);
-        int columnIndex = where.isEmpty() ? -1 : columnIndex(columns, where.get().columnName());
+        Selection selection = where.orElse(null);
+        int columnIndex = selection == null ? -1 : columnIndex(columns, selection.columnName());
         ColumnSpec filterColumn = columnIndex < 0 ? null : columns.get(columnIndex);
         if (filterColumn != null)
-            requireConstant(filterColumn, where.get().constant());
+            filterColumn.requireConstant(selection.constant());
 
         int version;
         int deleted = 0;
@@ -236,7 +238,7 @@ public final class StorageEngine implements AutoCloseable {
             List<SwanFile.Partition> rewrittenBodies = new ArrayList<>();
             List<Catalog.PartitionEntry> rewriteEntries = new ArrayList<>();
             for (Catalog.PartitionEntry partition : pinned.partitions()) {
-                if (where.isPresent() && cannotMatch(partition, where.get(), where.get().columnName(), filterColumn)) {
+                if (selection != null && cannotMatch(partition, selection, filterColumn)) {
                     next.add(partition);
                     carried++;
                     continue;
@@ -245,9 +247,9 @@ public final class StorageEngine implements AutoCloseable {
                 for (Object[] row : readRows(tableName, partition, columns)) {
                     // Without a WHERE every row matches: that is the
                     // "DELETE FROM table;" that empties the table.
-                    boolean matches = where.isEmpty()
-                            || Pruning.matches(where.get().comparison(),
-                                    where.get().constant(), row[columnIndex], filterColumn.type());
+                    boolean matches = selection == null
+                            || Pruning.matches(selection.comparison(),
+                                    selection.constant(), row[columnIndex], filterColumn.type());
                     if (matches) {
                         deleted++;
                     } else {
@@ -295,7 +297,7 @@ public final class StorageEngine implements AutoCloseable {
             }
         }
 
-        long durationMs = (System.nanoTime() - start) / 1_000_000L;
+        long durationMs = LogFormat.elapsedMs(start);
         LOGGER.debug("table={} version={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} durationMs={}",
                 LogFormat.sanitize(tableName), version, deleted, rewritten, carried, durationMs);
         return Result.deleted(version, deleted, rewritten, carried);
@@ -307,17 +309,30 @@ public final class StorageEngine implements AutoCloseable {
      * version read is published through {@link #lastReadVersion()}.
      */
     public List<Object[]> select(String tableName, Optional<Selection> where) {
+        return select(List.of(tableName),
+                where.map(List::of).orElse(List.of()), List.of());
+    }
+
+    /**
+     * The joined rows of the named tables' newest committed versions. Every
+     * table is pinned before planning starts, so one statement sees one
+     * snapshot per table even if a commit lands while it runs. Filters are
+     * pruned per table; joins are folded left to right in {@code FROM} order.
+     */
+    public List<Object[]> select(List<String> tableNames, List<Selection> filters,
+                                 List<JoinCondition> joins) {
         long start = System.nanoTime();
-        try (PinnedQuery query = openQuery(tableName, where)) {
+        try (PinnedQuery query = openQuery(tableNames, filters, joins)) {
             List<Object[]> out = query.drain();
             lastReadVersion = query.version();
             lastPartitionsRead = query.stats().partitionsRead();
             lastPartitionsPruned = query.stats().partitionsPruned();
-            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            long durationMs = LogFormat.elapsedMs(start);
             LOGGER.debug(
-                    "table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                    LogFormat.sanitize(tableName), out.size(), query.stats().partitionsRead(),
-                    query.stats().partitionsPruned(), query.version(), durationMs);
+                    "tables={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                    LogFormat.sanitize(String.join(",", tableNames)), out.size(),
+                    query.stats().partitionsRead(), query.stats().partitionsPruned(),
+                    query.version(), durationMs);
             return out;
         }
     }
@@ -330,14 +345,31 @@ public final class StorageEngine implements AutoCloseable {
      * plan nor the rows it reads.
      */
     public PinnedQuery openQuery(String tableName, Optional<Selection> where) {
-        Catalog.TableEntry entry = entry(tableName);
-        VersionedTable.PinnedVersion pinned = versioned(tableName).begin();
+        return openQuery(List.of(tableName),
+                where.map(List::of).orElse(List.of()), List.of());
+    }
+
+    /**
+     * Pins one snapshot per table, then plans their left-deep join. All
+     * pins are taken before the plan is built; if planning fails they are
+     * released again.
+     */
+    public PinnedQuery openQuery(List<String> tableNames, List<Selection> filters,
+                                 List<JoinCondition> joins) {
+        List<VersionedTable.PinnedVersion> pinned = new ArrayList<>(tableNames.size());
         try {
-            Plan plan = new Planner(entry.columns, pinned.partitions(), dataDir.resolve(entry.dataFile))
-                    .plan(tableName, where);
+            List<Planner.TableInput> inputs = new ArrayList<>(tableNames.size());
+            for (String tableName : tableNames) {
+                Catalog.TableEntry entry = entry(tableName);
+                VersionedTable.PinnedVersion version = versioned(tableName).begin();
+                pinned.add(version);
+                inputs.add(new Planner.TableInput(tableName, entry.columns, version.partitions(),
+                        dataDir.resolve(entry.dataFile)));
+            }
+            Plan plan = new Planner(inputs).plan(filters, joins);
             return new PinnedQuery(pinned, plan);
         } catch (RuntimeException e) {
-            pinned.close();
+            for (VersionedTable.PinnedVersion version : pinned) version.close();
             throw e;
         }
     }
@@ -520,35 +552,19 @@ public final class StorageEngine implements AutoCloseable {
         throw new IllegalArgumentException("unknown column: " + columnName);
     }
 
-    private static void requireConstant(ColumnSpec column, Object constant) {
-        if (constant == null)
-            throw new IllegalArgumentException("constant must not be null");
-        if (!column.type().accepts(constant))
-            throw new IllegalArgumentException(
-                    "constant type mismatch for column " + column.name()
-                            + ": expected " + column.type() + " got " + constant.getClass().getSimpleName());
-    }
-
     /**
      * Whether a partition proves it holds no matching row. The complement of
      * the planner's pruning decision: this is the one decision both use.
      */
     private static boolean cannotMatch(Catalog.PartitionEntry partition, Selection selection,
-                                       String columnName, ColumnSpec column) {
-        Catalog.ColumnSummary summary = summary(partition, columnName);
+                                       ColumnSpec column) {
+        String columnName = selection.columnName();
+        Catalog.ColumnSummary summary = partition.summary(columnName);
         if (summary == null || summary.min() == null || summary.max() == null)
             throw new IllegalStateException("missing min/max summary for column " + columnName
                     + " in partition " + partition.index + "; refusing to decide the rewrite set without it");
         return !Pruning.mustRewrite(selection.comparison(), selection.constant(),
                 summary.min(), summary.max(), column.type());
-    }
-
-    private static Catalog.ColumnSummary summary(Catalog.PartitionEntry partition, String columnName) {
-        for (Catalog.ColumnSummary summary : partition.columns) {
-            if (summary.name().equals(columnName))
-                return summary;
-        }
-        return null;
     }
 
     private List<Object[]> readRows(String tableName, Catalog.PartitionEntry partition,

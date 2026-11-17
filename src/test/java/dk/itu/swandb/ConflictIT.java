@@ -1,13 +1,14 @@
 package dk.itu.swandb;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static dk.itu.swandb.TestSupport.TRIPS_SCHEMA;
+import static dk.itu.swandb.TestSupport.copyResource;
+import static dk.itu.swandb.plan.OperatorAssertions.assertRows;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -24,7 +25,6 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.enums.Comparison;
 import dk.itu.swandb.plan.Operator;
 import dk.itu.swandb.plan.Selection;
@@ -40,11 +40,6 @@ import dk.itu.swandb.plan.Selection;
  * Runs under the Failsafe plugin ({@code mvn verify}).
  */
 class ConflictIT {
-
-    private static final List<ColumnSpec> TRIPS_SCHEMA = List.of(
-            new ColumnSpec("city", ColumnType.STRING),
-            new ColumnSpec("distance", ColumnType.LONG),
-            new ColumnSpec("price", ColumnType.DOUBLE));
 
     private static final Selection COPENHAGEN =
             new Selection("city", Comparison.EQUALS, "Copenhagen");
@@ -257,19 +252,4 @@ class ConflictIT {
         return "trips" + UUID.randomUUID().toString().replace("-", "");
     }
 
-    private static Path copyResource(Path tmp, String resourceName) throws Exception {
-        Path target = tmp.resolve(resourceName);
-        try (InputStream in = ConflictIT.class.getClassLoader().getResourceAsStream(resourceName)) {
-            assertTrue(in != null, "missing test resource " + resourceName);
-            Files.write(target, in.readAllBytes());
-        }
-        return target;
-    }
-
-    private static void assertRows(List<Object[]> expected, List<Object[]> actual) {
-        assertEquals(expected.size(), actual.size());
-        for (int i = 0; i < expected.size(); i++) {
-            assertArrayEquals(expected.get(i), actual.get(i), "row " + i);
-        }
-    }
 }

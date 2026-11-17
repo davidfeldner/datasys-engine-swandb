@@ -1,5 +1,6 @@
 package dk.itu.swandb.sql;
 
+import static dk.itu.swandb.TestSupport.TRIPS_SCHEMA;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -11,9 +12,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import dk.itu.swandb.ColumnSpec;
 import dk.itu.swandb.StorageEngine;
-import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
 import dk.itu.swandb.sql.ast.Statement;
 
@@ -24,11 +23,6 @@ import dk.itu.swandb.sql.ast.Statement;
  * Runs under the Failsafe plugin (mvn verify), not Surefire.
  */
 class BinderIT {
-
-    private static final List<ColumnSpec> TRIPS_SCHEMA = List.of(
-            new ColumnSpec("city", ColumnType.STRING),
-            new ColumnSpec("distance", ColumnType.LONG),
-            new ColumnSpec("price", ColumnType.DOUBLE));
 
     /** The script of Exercise 3 Task 1, which must parse and bind as a whole. */
     private static final String TASK_1_SCRIPT = """

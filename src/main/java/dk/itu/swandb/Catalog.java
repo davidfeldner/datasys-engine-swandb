@@ -10,11 +10,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * On-disk JSON catalog. Stores per-table schema, the data file name, the
@@ -64,7 +62,6 @@ public final class Catalog {
         }
 
         public String name() { return name; }
-        public ColumnType type() { return type; }
         public Object min() { return min; }
         public Object max() { return max; }
 
@@ -102,9 +99,7 @@ public final class Catalog {
         }
 
         public int index() { return index; }
-        public int version() { return version; }
         public int rowCount() { return rowCount; }
-        public List<ColumnSummary> columns() { return columns; }
         public long offset() { return offset; }
 
         /**
@@ -113,6 +108,15 @@ public final class Catalog {
          * re-measured by the commit that needs the boundary.
          */
         public long endOffset() { return endOffset; }
+
+        /** The summary for one column, or {@code null} when this entry lacks it. */
+        public ColumnSummary summary(String columnName) {
+            for (ColumnSummary summary : columns) {
+                if (summary.name().equals(columnName))
+                    return summary;
+            }
+            return null;
+        }
 
         /**
          * A detached copy. Versions share entries — a carried partition is
@@ -177,9 +181,6 @@ public final class Catalog {
             throw new IllegalStateException("failed to read catalog at " + file, e);
         }
     }
-
-    /** Where {@code catalog.json} lives. */
-    public Path file() { return file; }
 
     /**
      * Persist the in-memory document to disk, atomically: write

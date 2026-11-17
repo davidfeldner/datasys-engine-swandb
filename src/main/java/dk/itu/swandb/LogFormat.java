@@ -17,4 +17,9 @@ public final class LogFormat {
             return "null";
         return value.toString().replace(',', ';');
     }
+
+    /** Milliseconds since {@code startNanos}, the {@code durationMs} log field. */
+    public static long elapsedMs(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000L;
+    }
 }
