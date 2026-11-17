@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
-import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
@@ -150,8 +149,8 @@ class SqlPrinterTest {
         // Escaped quotes are out of scope and a literal ends at the next quote
         // on the same line, so these values have no spelling in the subset.
         for (String value : List.of("it's", "two\nlines", "carriage\rreturn")) {
-            SelectStatement select = new SelectStatement("trips",
-                    Optional.of(new Predicate("city", Comparison.EQUALS, value)));
+            SelectStatement select = new SelectStatement(List.of("trips"),
+                    List.of(new Predicate("city", Comparison.EQUALS, value)), List.of());
 
             IllegalArgumentException e =
                     assertThrows(IllegalArgumentException.class, () -> printer.print(select), value);
@@ -163,8 +162,8 @@ class SqlPrinterTest {
     @Test
     void doublesThatAreNotFiniteAreRefused() {
         for (double value : new double[]{Double.NaN, Double.POSITIVE_INFINITY}) {
-            SelectStatement select = new SelectStatement("trips",
-                    Optional.of(new Predicate("price", Comparison.LESS_THAN, value)));
+            SelectStatement select = new SelectStatement(List.of("trips"),
+                    List.of(new Predicate("price", Comparison.LESS_THAN, value)), List.of());
 
             assertThrows(IllegalArgumentException.class, () -> printer.print(select));
         }

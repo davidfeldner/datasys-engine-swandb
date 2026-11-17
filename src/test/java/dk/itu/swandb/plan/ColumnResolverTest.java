@@ -43,10 +43,10 @@ class ColumnResolverTest {
     @Test
     void indexesContinueAcrossTablesInFromOrder() {
         assertEquals(0, TESTBED.resolve("o_orderkey").rowIndex());
-        assertEquals(3, TESTBED.tableOffset(1));
+        assertEquals(2, TESTBED.resolve("o_prodname").rowIndex());
+        assertEquals(3, TESTBED.resolve("c_name").rowIndex());
         assertEquals(5, TESTBED.resolve("p_name").rowIndex());
         assertEquals(6, TESTBED.resolve("p_price").rowIndex());
-        assertEquals(7, TESTBED.rowWidth());
     }
 
     @Test

@@ -113,9 +113,9 @@ public final class Planner {
         }
     }
 
-    private static List<List<BoundFilter>> bindFilters(ColumnResolver resolver, List<Selection> filters) {
+    private List<List<BoundFilter>> bindFilters(ColumnResolver resolver, List<Selection> filters) {
         List<List<BoundFilter>> byTable = new ArrayList<>();
-        for (int i = 0; i < resolver.tableNames().size(); i++) {
+        for (int i = 0; i < tables.size(); i++) {
             byTable.add(new ArrayList<>());
         }
         for (Selection filter : filters) {

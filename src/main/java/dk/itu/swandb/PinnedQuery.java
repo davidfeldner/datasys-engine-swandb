@@ -24,10 +24,6 @@ public final class PinnedQuery implements AutoCloseable {
     private final List<VersionedTable.PinnedVersion> pinned;
     private final Plan plan;
 
-    PinnedQuery(VersionedTable.PinnedVersion pinned, Plan plan) {
-        this(List.of(pinned), plan);
-    }
-
     PinnedQuery(List<VersionedTable.PinnedVersion> pinned, Plan plan) {
         if (pinned == null || pinned.isEmpty())
             throw new IllegalArgumentException("a query must pin at least one version");

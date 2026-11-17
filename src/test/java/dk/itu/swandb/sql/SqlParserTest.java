@@ -61,15 +61,16 @@ class SqlParserTest {
     void selectWithWhereParsesToExpectedAst() {
         List<Statement> statements = parser.parse("SELECT * FROM trips WHERE distance > 100;");
 
-        assertEquals(List.of(new SelectStatement("trips",
-                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)))), statements);
+        assertEquals(List.of(new SelectStatement(List.of("trips"),
+                List.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)), List.of())),
+                statements);
     }
 
     @Test
     void selectWithoutWhereParsesToExpectedAst() {
         List<Statement> statements = parser.parse("SELECT * FROM trips;");
 
-        assertEquals(List.of(new SelectStatement("trips", Optional.empty())), statements);
+        assertEquals(List.of(new SelectStatement(List.of("trips"), List.of(), List.of())), statements);
     }
 
     @Test
@@ -162,7 +163,7 @@ class SqlParserTest {
                         new ColumnSpec("distance", ColumnType.LONG),
                         new ColumnSpec("price", ColumnType.DOUBLE))),
                 new CopyStatement("trips", "trips.csv"),
-                new SelectStatement("trips", Optional.empty())),
+                new SelectStatement(List.of("trips"), List.of(), List.of())),
                 parser.parse(TRIPS_SCRIPT));
     }
 
@@ -199,7 +200,7 @@ class SqlParserTest {
 
     @Test
     void keywordsAreCaseInsensitiveAndIdentifierCaseSurvives() {
-        assertEquals(List.of(new SelectStatement("Trips", Optional.empty())),
+        assertEquals(List.of(new SelectStatement(List.of("Trips"), List.of(), List.of())),
                 parser.parse("select * from Trips ;"));
 
         // Type names are keywords too, so 'string' is STRING; the column name
@@ -294,7 +295,7 @@ class SqlParserTest {
 
     @Test
     void commentBeforeTheSemicolonIsSkipped() {
-        assertEquals(List.of(new SelectStatement("trips", Optional.empty())),
+        assertEquals(List.of(new SelectStatement(List.of("trips"), List.of(), List.of())),
                 parser.parse("SELECT * FROM trips -- every row\n;"));
     }
 

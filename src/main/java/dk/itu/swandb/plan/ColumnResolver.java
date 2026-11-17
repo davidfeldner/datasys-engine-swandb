@@ -29,8 +29,6 @@ public final class ColumnResolver {
 
     private final List<String> tableNames;
     private final List<List<ColumnSpec>> schemas;
-    private final int[] tableOffsets;
-    private final int rowWidth;
 
     /**
      * @param tableNames the table names in {@code FROM}-list order
@@ -46,36 +44,10 @@ public final class ColumnResolver {
 
         this.tableNames = List.copyOf(tableNames);
         List<List<ColumnSpec>> copied = new ArrayList<>(schemas.size());
-        this.tableOffsets = new int[schemas.size()];
-        int width = 0;
-        for (int t = 0; t < schemas.size(); t++) {
-            List<ColumnSpec> schema = List.copyOf(Objects.requireNonNull(schemas.get(t), "schema"));
-            tableOffsets[t] = width;
-            width += schema.size();
-            copied.add(schema);
+        for (List<ColumnSpec> schema : schemas) {
+            copied.add(List.copyOf(Objects.requireNonNull(schema, "schema")));
         }
         this.schemas = List.copyOf(copied);
-        this.rowWidth = width;
-    }
-
-    /** The table names in {@code FROM}-list order. */
-    public List<String> tableNames() {
-        return tableNames;
-    }
-
-    /** One table's schema, indexed by its {@code FROM}-list position. */
-    public List<ColumnSpec> schema(int tableIndex) {
-        return schemas.get(tableIndex);
-    }
-
-    /** The first row index that belongs to {@code tableIndex}. */
-    public int tableOffset(int tableIndex) {
-        return tableOffsets[tableIndex];
-    }
-
-    /** The width of the concatenated row. */
-    public int rowWidth() {
-        return rowWidth;
     }
 
     /**
@@ -89,16 +61,18 @@ public final class ColumnResolver {
             throw new IllegalArgumentException("column name must not be empty");
 
         ResolvedColumn found = null;
+        int rowIndex = 0;
         for (int t = 0; t < schemas.size(); t++) {
             List<ColumnSpec> schema = schemas.get(t);
             for (int c = 0; c < schema.size(); c++) {
-                if (!schema.get(c).name().equals(columnName))
-                    continue;
-                if (found != null)
-                    throw new IllegalArgumentException("ambiguous column: " + columnName
-                            + " in tables " + found.tableName() + ", " + tableNames.get(t));
-                found = new ResolvedColumn(t, tableNames.get(t), c,
-                        tableOffsets[t] + c, schema.get(c));
+                ColumnSpec column = schema.get(c);
+                if (column.name().equals(columnName)) {
+                    if (found != null)
+                        throw new IllegalArgumentException("ambiguous column: " + columnName
+                                + " in tables " + found.tableName() + ", " + tableNames.get(t));
+                    found = new ResolvedColumn(t, tableNames.get(t), c, rowIndex, column);
+                }
+                rowIndex++;
             }
         }
         if (found == null)
