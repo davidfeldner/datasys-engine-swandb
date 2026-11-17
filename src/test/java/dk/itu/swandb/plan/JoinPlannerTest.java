@@ -1,5 +1,6 @@
 package dk.itu.swandb.plan;
 
+import static dk.itu.swandb.plan.OperatorAssertions.drain;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -172,15 +173,4 @@ class JoinPlannerTest {
         return file.toString();
     }
 
-    private static List<Object[]> drain(Operator operator) {
-        List<Object[]> out = new ArrayList<>();
-        operator.open();
-        try {
-            Object[] row;
-            while ((row = operator.next()) != null) out.add(row);
-        } finally {
-            operator.close();
-        }
-        return out;
-    }
 }
