@@ -24,11 +24,12 @@ import org.slf4j.LoggerFactory;
  * newest version is also the one in {@code catalog.json}; older versions
  * live in memory only and are gone after a restart.
  *
- * <p><b>Commit</b> is {@code putIfAbsent(base + 1, next)} on the table's
+ * <p><b>Commit</b> stores {@code base + 1} in the table's
  * {@link ConcurrentHashMap} version sink, plus one reference assignment that
- * publishes it as newest. One script has one writer, so the CAS always
- * succeeds here; it is the operation that will let the loser lose once
- * Exercise 8 races two writers.
+ * publishes it as newest. Since Exercise 8 the first committer wins: a writer
+ * whose base is no longer newest validates against the moved version and gets
+ * a {@link ConflictException}, so only one of two racing writers can commit
+ * from the same base.
  *
  * <p><b>Snapshot.</b> A statement calls {@link #begin()} and gets the newest
  * committed version, by reference, and holds it until
@@ -161,21 +162,39 @@ public final class VersionedTable {
     }
 
     /**
-     * Commits {@code partitions} as version {@code expectedVersion + 1} if
-     * the newest version is still {@code expectedVersion}.
+     * Validates a writer's base version, the check Exercise 8 calls commit
+     * validation.
      *
-     * @return the committed version number, or {@code -1} if another writer
-     *         committed on top of it first.
+     * @throws ConflictException if another writer committed first; the log
+     *         then carries the {@code conflict table=... base=... current=...}
+     *         ERROR line.
+     * @throws StaleVersionException if the base version is no longer live,
+     *         which means retention dropped it while this writer ran.
+     */
+    public synchronized void validate(int expectedVersion) {
+        Version base = versions.get(expectedVersion);
+        if (base == null)
+            throw new StaleVersionException(name, expectedVersion);
+        if (base != newest) {
+            LOGGER.error("conflict table={} base={} current={}",
+                    LogFormat.sanitize(name), expectedVersion, newest.number);
+            throw new ConflictException(name, expectedVersion, newest.number);
+        }
+    }
+
+    /**
+     * Commits {@code partitions} as version {@code expectedVersion + 1}.
+     * Validates first, so a statement that lost the race throws instead of
+     * swapping its partition list in on top of the winner's.
+     *
+     * @return the committed version number.
+     * @throws ConflictException if another writer committed first.
      * @throws StaleVersionException if the expected version is no longer live.
      */
     public synchronized int commit(int expectedVersion, List<Catalog.PartitionEntry> partitions) {
-        if (!versions.containsKey(expectedVersion))
-            throw new StaleVersionException(name, expectedVersion);
-        if (versions.get(expectedVersion) != newest)
-            return -1;
+        validate(expectedVersion);
         Version next = new Version(expectedVersion + 1, partitions);
-        if (versions.putIfAbsent(next.number, next) != null)
-            return -1;
+        versions.put(next.number, next);
         newest = next;
         LOGGER.debug("table={} version={} partitions={} committed",
                 LogFormat.sanitize(name), next.number, next.partitions.size());
