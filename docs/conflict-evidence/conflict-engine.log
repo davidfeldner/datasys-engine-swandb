@@ -1,0 +1,19 @@
+2026-11-10 15:25:27.565,,,3,DEBUG,StorageEngine,table=trips5282708cc4b64a1daa70a398a55c67e7 columns=3 version=0 durationMs=33
+2026-11-10 15:25:27.568,,,3,DEBUG,StorageEngine,table=trips5282708cc4b64a1daa70a398a55c67e7 columns=3 durationMs=0
+2026-11-10 15:25:27.572,,,3,DEBUG,VersionedTable,table=trips5282708cc4b64a1daa70a398a55c67e7 version=1 partitions=4 committed
+2026-11-10 15:25:27.572,,,3,DEBUG,StorageEngine,table=trips5282708cc4b64a1daa70a398a55c67e7 file=/tmp/junit-7361059087440345225/trips.csv rows=8 partitions=4 version=1 durationMs=4
+2026-11-10 15:25:27.574,,,45,DEBUG,StorageEngine,table=trips5282708cc4b64a1daa70a398a55c67e7 columns=3 durationMs=0
+2026-11-10 15:25:27.575,,,3,DEBUG,StorageEngine,table=trips5282708cc4b64a1daa70a398a55c67e7 columns=3 durationMs=0
+2026-11-10 15:25:27.577,,,3,DEBUG,VersionedTable,table=trips5282708cc4b64a1daa70a398a55c67e7 version=2 partitions=8 committed
+2026-11-10 15:25:27.577,,,3,DEBUG,StorageEngine,table=trips5282708cc4b64a1daa70a398a55c67e7 file=/tmp/junit-7361059087440345225/trips.csv rows=8 partitions=4 version=2 durationMs=1
+2026-11-10 15:25:27.577,,,45,ERROR,VersionedTable,conflict table=trips5282708cc4b64a1daa70a398a55c67e7 base=1 current=2
+2026-11-10 15:25:27.582,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=0 decision=READ
+2026-11-10 15:25:27.582,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=1 decision=READ
+2026-11-10 15:25:27.582,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=2 decision=READ
+2026-11-10 15:25:27.582,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=3 decision=READ
+2026-11-10 15:25:27.582,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=4 decision=READ
+2026-11-10 15:25:27.582,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=5 decision=READ
+2026-11-10 15:25:27.583,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=6 decision=READ
+2026-11-10 15:25:27.583,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partition=7 decision=READ
+2026-11-10 15:25:27.584,,,3,DEBUG,Planner,table=trips5282708cc4b64a1daa70a398a55c67e7 partitionsTotal=8 partitionsRead=8 partitionsPruned=0 durationMs=2
+2026-11-10 15:25:27.585,,,3,DEBUG,StorageEngine,table=trips5282708cc4b64a1daa70a398a55c67e7 rowsOut=16 partitionsRead=8 partitionsPruned=0 version=2 durationMs=4
