@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dk.itu.swandb.ColumnSpec;
+import dk.itu.swandb.LogFormat;
 import dk.itu.swandb.StorageEngine;
 import dk.itu.swandb.plan.ColumnResolver;
 import dk.itu.swandb.plan.ColumnResolver.ResolvedColumn;
@@ -57,10 +58,10 @@ public final class Binder {
                 case SelectStatement select -> bindSelect(select);
                 case DeleteStatement delete -> bindDelete(delete);
             }
-            LOGGER.debug("statement={} durationMs={}", s.getClass().getSimpleName(), elapsedMs(start));
+            LOGGER.debug("statement={} durationMs={}", s.getClass().getSimpleName(), LogFormat.elapsedMs(start));
         } catch (IllegalArgumentException e) {
             LOGGER.error("statement={} failed reason={} durationMs={}",
-                    s.getClass().getSimpleName(), e.getMessage().replace(',', ';'), elapsedMs(start));
+                    s.getClass().getSimpleName(), e.getMessage().replace(',', ';'), LogFormat.elapsedMs(start));
             throw e;
         }
     }
@@ -113,15 +114,7 @@ public final class Binder {
     /** The column must resolve to exactly one table, and the constant must have its exact type. */
     private static void bindFilter(ColumnResolver resolver, Predicate predicate) {
         ResolvedColumn resolved = resolver.resolve(predicate.columnName());
-        ColumnSpec column = resolved.column();
-        if (predicate.constant() == null)
-            throw new IllegalArgumentException(
-                    "constant must not be null for column " + column.name());
-        if (!column.type().accepts(predicate.constant()))
-            throw new IllegalArgumentException(
-                    "constant type mismatch for column " + column.name()
-                            + ": expected " + column.type()
-                            + " got " + predicate.constant().getClass().getSimpleName());
+        resolved.column().requireConstant(predicate.constant());
     }
 
     /**
@@ -141,9 +134,5 @@ public final class Binder {
             throw new IllegalArgumentException("join column type mismatch: "
                     + left.column().name() + " is " + left.column().type() + " but "
                     + right.column().name() + " is " + right.column().type());
-    }
-
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 }

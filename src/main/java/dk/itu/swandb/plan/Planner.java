@@ -104,11 +104,11 @@ public final class Planner {
             LOGGER.debug(
                     "tables={} joins={} partitionsTotal={} partitionsRead={} partitionsPruned={} durationMs={}",
                     tables.size(), joins.size(), total.partitionsTotal(), total.partitionsRead(),
-                    total.partitionsPruned(), elapsedMs(start));
+                    total.partitionsPruned(), LogFormat.elapsedMs(start));
             return new Plan(joined, total);
         } catch (RuntimeException e) {
             LOGGER.debug("tables={} error={} durationMs={}",
-                    tables.size(), e.getClass().getSimpleName(), elapsedMs(start));
+                    tables.size(), e.getClass().getSimpleName(), LogFormat.elapsedMs(start));
             throw e;
         }
     }
@@ -120,21 +120,10 @@ public final class Planner {
         }
         for (Selection filter : filters) {
             ResolvedColumn column = resolver.resolve(filter.columnName());
-            validateConstant(column.column(), filter.constant());
+            column.column().requireConstant(filter.constant());
             byTable.get(column.tableIndex()).add(new BoundFilter(filter, column));
         }
         return byTable;
-    }
-
-    /** The engine API can be called without the SQL binder, so it checks the type too. */
-    private static void validateConstant(ColumnSpec column, Object constant) {
-        if (constant == null)
-            throw new IllegalArgumentException("constant must not be null");
-        if (!column.type().accepts(constant))
-            throw new IllegalArgumentException(
-                    "constant type mismatch for column " + column.name()
-                            + ": expected " + column.type() + " got "
-                            + constant.getClass().getSimpleName());
     }
 
     /**
@@ -149,7 +138,7 @@ public final class Planner {
             boolean provablyFree = false;
             for (BoundFilter filter : filters) {
                 String columnName = filter.column().column().name();
-                Catalog.ColumnSummary summary = summary(partition, columnName);
+                Catalog.ColumnSummary summary = partition.summary(columnName);
                 // Never prune on missing metadata: a partition that is never
                 // read can never be recovered by the filter below.
                 if (summary == null || summary.min() == null || summary.max() == null)
@@ -229,17 +218,6 @@ public final class Planner {
         return found;
     }
 
-    private static Catalog.ColumnSummary summary(Catalog.PartitionEntry partition, String columnName) {
-        for (Catalog.ColumnSummary summary : partition.columns) {
-            if (summary.name().equals(columnName))
-                return summary;
-        }
-        return null;
-    }
-
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
-    }
 
     private record BoundFilter(Selection selection, ResolvedColumn column) {
     }

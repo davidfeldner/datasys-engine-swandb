@@ -10,6 +10,7 @@ import org.antlr.v4.runtime.Recognizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import dk.itu.swandb.LogFormat;
 import dk.itu.swandb.sql.ast.Statement;
 import dk.itu.swandb.sql.parser.SqlLexer;
 import dk.itu.swandb.sql.parser.SqlParser.ScriptContext;
@@ -45,15 +46,15 @@ public final class SqlParser {
         long start = System.nanoTime();
         try {
             List<Statement> statements = parseOrThrow(sqlText);
-            LOGGER.debug("statements={} durationMs={}", statements.size(), elapsedMs(start));
+            LOGGER.debug("statements={} durationMs={}", statements.size(), LogFormat.elapsedMs(start));
             return statements;
         } catch (SqlParseException e) {
-            LOGGER.error("failed line={} col={} durationMs={}", e.line(), e.column(), elapsedMs(start));
+            LOGGER.error("failed line={} col={} durationMs={}", e.line(), e.column(), LogFormat.elapsedMs(start));
             throw e;
         } catch (RuntimeException e) {
             // A syntax error is the only failure a script can cause; anything
             // else is a bug, but every call still gets its one log line.
-            LOGGER.error("failed error={} durationMs={}", e.getClass().getSimpleName(), elapsedMs(start));
+            LOGGER.error("failed error={} durationMs={}", e.getClass().getSimpleName(), LogFormat.elapsedMs(start));
             throw e;
         }
     }
@@ -74,9 +75,5 @@ public final class SqlParser {
 
         ScriptContext script = parser.script();
         return (List<Statement>) new SqlAstBuilder().visitScript(script);
-    }
-
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 }

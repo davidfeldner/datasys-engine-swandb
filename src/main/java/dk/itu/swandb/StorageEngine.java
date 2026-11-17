@@ -97,12 +97,12 @@ public final class StorageEngine implements AutoCloseable {
         long start = System.nanoTime();
         try {
             List<ColumnSpec> columns = List.copyOf(entry(tableName).columns);
-            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            long durationMs = LogFormat.elapsedMs(start);
             LOGGER.debug("table={} columns={} durationMs={}",
                     LogFormat.sanitize(tableName), columns.size(), durationMs);
             return columns;
         } catch (RuntimeException e) {
-            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            long durationMs = LogFormat.elapsedMs(start);
             LOGGER.debug("table={} error={} durationMs={}",
                     LogFormat.sanitize(tableName), e.getClass().getSimpleName(), durationMs);
             throw e;
@@ -135,7 +135,7 @@ public final class StorageEngine implements AutoCloseable {
         tables.put(tableName, VersionedTable.empty(tableName));
         catalog.save();
 
-        long durationMs = (System.nanoTime() - start) / 1_000_000L;
+        long durationMs = LogFormat.elapsedMs(start);
         LOGGER.debug("table={} columns={} version={} durationMs={}",
                 LogFormat.sanitize(tableName), columns.size(), 0, durationMs);
         return Result.created(0);
@@ -190,7 +190,7 @@ public final class StorageEngine implements AutoCloseable {
             }
         }
 
-        long durationMs = (System.nanoTime() - start) / 1_000_000L;
+        long durationMs = LogFormat.elapsedMs(start);
         LOGGER.debug("table={} file={} rows={} partitions={} version={} durationMs={}",
                 LogFormat.sanitize(tableName), LogFormat.sanitize(csvFilePath), rows.size(),
                 partitions.size(), version, durationMs);
@@ -219,7 +219,7 @@ public final class StorageEngine implements AutoCloseable {
         int columnIndex = where.isEmpty() ? -1 : columnIndex(columns, where.get().columnName());
         ColumnSpec filterColumn = columnIndex < 0 ? null : columns.get(columnIndex);
         if (filterColumn != null)
-            requireConstant(filterColumn, where.get().constant());
+            filterColumn.requireConstant(where.get().constant());
 
         int version;
         int deleted = 0;
@@ -296,7 +296,7 @@ public final class StorageEngine implements AutoCloseable {
             }
         }
 
-        long durationMs = (System.nanoTime() - start) / 1_000_000L;
+        long durationMs = LogFormat.elapsedMs(start);
         LOGGER.debug("table={} version={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} durationMs={}",
                 LogFormat.sanitize(tableName), version, deleted, rewritten, carried, durationMs);
         return Result.deleted(version, deleted, rewritten, carried);
@@ -326,7 +326,7 @@ public final class StorageEngine implements AutoCloseable {
             lastReadVersion = query.version();
             lastPartitionsRead = query.stats().partitionsRead();
             lastPartitionsPruned = query.stats().partitionsPruned();
-            long durationMs = (System.nanoTime() - start) / 1_000_000L;
+            long durationMs = LogFormat.elapsedMs(start);
             LOGGER.debug(
                     "tables={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
                     LogFormat.sanitize(String.join(",", tableNames)), out.size(),
@@ -551,35 +551,18 @@ public final class StorageEngine implements AutoCloseable {
         throw new IllegalArgumentException("unknown column: " + columnName);
     }
 
-    private static void requireConstant(ColumnSpec column, Object constant) {
-        if (constant == null)
-            throw new IllegalArgumentException("constant must not be null");
-        if (!column.type().accepts(constant))
-            throw new IllegalArgumentException(
-                    "constant type mismatch for column " + column.name()
-                            + ": expected " + column.type() + " got " + constant.getClass().getSimpleName());
-    }
-
     /**
      * Whether a partition proves it holds no matching row. The complement of
      * the planner's pruning decision: this is the one decision both use.
      */
     private static boolean cannotMatch(Catalog.PartitionEntry partition, Selection selection,
                                        String columnName, ColumnSpec column) {
-        Catalog.ColumnSummary summary = summary(partition, columnName);
+        Catalog.ColumnSummary summary = partition.summary(columnName);
         if (summary == null || summary.min() == null || summary.max() == null)
             throw new IllegalStateException("missing min/max summary for column " + columnName
                     + " in partition " + partition.index + "; refusing to decide the rewrite set without it");
         return !Pruning.mustRewrite(selection.comparison(), selection.constant(),
                 summary.min(), summary.max(), column.type());
-    }
-
-    private static Catalog.ColumnSummary summary(Catalog.PartitionEntry partition, String columnName) {
-        for (Catalog.ColumnSummary summary : partition.columns) {
-            if (summary.name().equals(columnName))
-                return summary;
-        }
-        return null;
     }
 
     private List<Object[]> readRows(String tableName, Catalog.PartitionEntry partition,

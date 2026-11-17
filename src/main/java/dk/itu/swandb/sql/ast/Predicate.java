@@ -1,7 +1,5 @@
 package dk.itu.swandb.sql.ast;
 
-import java.util.Optional;
-
 import dk.itu.swandb.enums.Comparison;
 
 /**

@@ -83,13 +83,13 @@ public final class Executor {
         try {
             binder.bind(statement);
             Result result = run(statement);
-            logSummary(statement, result, elapsedMs(start));
+            logSummary(statement, result, LogFormat.elapsedMs(start));
             return result.rowsOut();
         } catch (RuntimeException e) {
             LOGGER.error("statement={} table={} failed reason={} durationMs={}",
                     kind(statement), LogFormat.sanitize(table(statement)),
                     e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage().replace(',', ';'),
-                    elapsedMs(start));
+                    LogFormat.elapsedMs(start));
             throw e;
         }
     }
@@ -167,9 +167,6 @@ public final class Executor {
         };
     }
 
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
-    }
 
     /** Receives each statement's rows as the script runs. */
     @FunctionalInterface
