@@ -1,5 +1,6 @@
 package dk.itu.swandb.sql;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -9,9 +10,12 @@ import org.slf4j.LoggerFactory;
 
 import dk.itu.swandb.ColumnSpec;
 import dk.itu.swandb.StorageEngine;
+import dk.itu.swandb.plan.ColumnResolver;
+import dk.itu.swandb.plan.ColumnResolver.ResolvedColumn;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
 import dk.itu.swandb.sql.ast.DeleteStatement;
+import dk.itu.swandb.sql.ast.JoinPredicate;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -20,9 +24,16 @@ import dk.itu.swandb.sql.ast.Statement;
  * Validates a parsed statement against the engine's catalog: the table
  * exists, the referenced column exists, and a predicate constant has the
  * exact Java type its column demands. Everything that can be checked
- * without touching data is checked here, so execution (week 4) sees only
- * statements that make sense. The first violation throws
- * {@link IllegalArgumentException}, the same family as the engine API.
+ * without touching data is checked here, so execution sees only statements
+ * that make sense. The first violation throws {@link IllegalArgumentException},
+ * the same family as the engine API.
+ *
+ * <p>Since Exercise 10 a {@code SELECT} may name several tables. Column
+ * names stay unqualified, so every name must occur in exactly one table of
+ * the {@code FROM} list; the shared {@link ColumnResolver} answers which one,
+ * and rejects unknown and ambiguous names. A join predicate must connect two
+ * different tables whose columns have the same type, because the hash join
+ * compares keys with Java {@code equals}.
  */
 public final class Binder {
 
@@ -77,22 +88,32 @@ public final class Binder {
     }
 
     private void bindSelect(SelectStatement s) {
-        bindWhere(s.tableName(), s.where());
+        List<List<ColumnSpec>> schemas = new ArrayList<>(s.tableNames().size());
+        for (String tableName : s.tableNames()) {
+            schemas.add(engine.schema(tableName));
+        }
+        ColumnResolver resolver = new ColumnResolver(s.tableNames(), schemas);
+
+        for (Predicate filter : s.filters()) {
+            bindFilter(resolver, filter);
+        }
+        for (JoinPredicate join : s.joins()) {
+            bindJoin(resolver, join);
+        }
     }
 
     /** A DELETE needs a table to delete from; whether it has rows is execution's business. */
     private void bindDelete(DeleteStatement s) {
-        bindWhere(s.tableName(), s.where());
+        ColumnResolver resolver = new ColumnResolver(List.of(s.tableName()),
+                List.of(engine.schema(s.tableName())));
+        if (s.where().isPresent())
+            bindFilter(resolver, s.where().get());
     }
 
-    /** The table must exist, and a WHERE must name a column with a constant of its type. */
-    private void bindWhere(String tableName, java.util.Optional<Predicate> where) {
-        List<ColumnSpec> schema = engine.schema(tableName);
-        if (where.isEmpty())
-            return;
-
-        Predicate predicate = where.get();
-        ColumnSpec column = columnOrThrow(schema, predicate.columnName(), tableName);
+    /** The column must resolve to exactly one table, and the constant must have its exact type. */
+    private static void bindFilter(ColumnResolver resolver, Predicate predicate) {
+        ResolvedColumn resolved = resolver.resolve(predicate.columnName());
+        ColumnSpec column = resolved.column();
         if (predicate.constant() == null)
             throw new IllegalArgumentException(
                     "constant must not be null for column " + column.name());
@@ -103,12 +124,23 @@ public final class Binder {
                             + " got " + predicate.constant().getClass().getSimpleName());
     }
 
-    private static ColumnSpec columnOrThrow(List<ColumnSpec> schema, String columnName, String tableName) {
-        for (ColumnSpec column : schema) {
-            if (column.name().equals(columnName))
-                return column;
-        }
-        throw new IllegalArgumentException("unknown column: " + columnName + " in table " + tableName);
+    /**
+     * Both sides must resolve to different tables and to columns of the same
+     * type. The type rule matters because the hash join compares keys with
+     * {@code equals}: a mismatched join would silently return no rows.
+     */
+    private static void bindJoin(ColumnResolver resolver, JoinPredicate join) {
+        ResolvedColumn left = resolver.resolve(join.leftColumn());
+        ResolvedColumn right = resolver.resolve(join.rightColumn());
+
+        if (left.tableIndex() == right.tableIndex())
+            throw new IllegalArgumentException("join sides must be in different tables: "
+                    + left.column().name() + " and " + right.column().name()
+                    + " both belong to table " + left.tableName());
+        if (left.column().type() != right.column().type())
+            throw new IllegalArgumentException("join column type mismatch: "
+                    + left.column().name() + " is " + left.column().type() + " but "
+                    + right.column().name() + " is " + right.column().type());
     }
 
     private static long elapsedMs(long startNanos) {

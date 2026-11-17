@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import dk.itu.swandb.enums.Comparison;
+import dk.itu.swandb.plan.JoinCondition;
 import dk.itu.swandb.plan.Plan;
 import dk.itu.swandb.plan.Planner;
 import dk.itu.swandb.plan.Selection;
@@ -307,17 +308,30 @@ public final class StorageEngine implements AutoCloseable {
      * version read is published through {@link #lastReadVersion()}.
      */
     public List<Object[]> select(String tableName, Optional<Selection> where) {
+        return select(List.of(tableName),
+                where.map(List::of).orElse(List.of()), List.of());
+    }
+
+    /**
+     * The joined rows of the named tables' newest committed versions. Every
+     * table is pinned before planning starts, so one statement sees one
+     * snapshot per table even if a commit lands while it runs. Filters are
+     * pruned per table; joins are folded left to right in {@code FROM} order.
+     */
+    public List<Object[]> select(List<String> tableNames, List<Selection> filters,
+                                 List<JoinCondition> joins) {
         long start = System.nanoTime();
-        try (PinnedQuery query = openQuery(tableName, where)) {
+        try (PinnedQuery query = openQuery(tableNames, filters, joins)) {
             List<Object[]> out = query.drain();
             lastReadVersion = query.version();
             lastPartitionsRead = query.stats().partitionsRead();
             lastPartitionsPruned = query.stats().partitionsPruned();
             long durationMs = (System.nanoTime() - start) / 1_000_000L;
             LOGGER.debug(
-                    "table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                    LogFormat.sanitize(tableName), out.size(), query.stats().partitionsRead(),
-                    query.stats().partitionsPruned(), query.version(), durationMs);
+                    "tables={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                    LogFormat.sanitize(String.join(",", tableNames)), out.size(),
+                    query.stats().partitionsRead(), query.stats().partitionsPruned(),
+                    query.version(), durationMs);
             return out;
         }
     }
@@ -330,14 +344,31 @@ public final class StorageEngine implements AutoCloseable {
      * plan nor the rows it reads.
      */
     public PinnedQuery openQuery(String tableName, Optional<Selection> where) {
-        Catalog.TableEntry entry = entry(tableName);
-        VersionedTable.PinnedVersion pinned = versioned(tableName).begin();
+        return openQuery(List.of(tableName),
+                where.map(List::of).orElse(List.of()), List.of());
+    }
+
+    /**
+     * Pins one snapshot per table, then plans their left-deep join. All
+     * pins are taken before the plan is built; if planning fails they are
+     * released again.
+     */
+    public PinnedQuery openQuery(List<String> tableNames, List<Selection> filters,
+                                 List<JoinCondition> joins) {
+        List<VersionedTable.PinnedVersion> pinned = new ArrayList<>(tableNames.size());
         try {
-            Plan plan = new Planner(entry.columns, pinned.partitions(), dataDir.resolve(entry.dataFile))
-                    .plan(tableName, where);
+            List<Planner.TableInput> inputs = new ArrayList<>(tableNames.size());
+            for (String tableName : tableNames) {
+                Catalog.TableEntry entry = entry(tableName);
+                VersionedTable.PinnedVersion version = versioned(tableName).begin();
+                pinned.add(version);
+                inputs.add(new Planner.TableInput(tableName, entry.columns, version.partitions(),
+                        dataDir.resolve(entry.dataFile)));
+            }
+            Plan plan = new Planner(inputs).plan(filters, joins);
             return new PinnedQuery(pinned, plan);
         } catch (RuntimeException e) {
-            pinned.close();
+            for (VersionedTable.PinnedVersion version : pinned) version.close();
             throw e;
         }
     }

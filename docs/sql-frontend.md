@@ -59,7 +59,7 @@ a `Long`, `23.5` a `Double` — and `ColumnSpec`, `ColumnType` and
 
 `Binder` holds a `StorageEngine` and validates one statement against the
 catalog: `CREATE TABLE` needs a non-empty column list without duplicate
-names, `COPY` and `SELECT` need an existing table, and a `SELECT ... WHERE`
+names, `COPY` and `SELECT` need existing tables, and a `SELECT ... WHERE`
 needs an existing column whose type matches the constant exactly. The binder
 reads the schema through `StorageEngine.schema(String)`, the read-only
 accessor added in this exercise, so no scan is involved.
@@ -68,6 +68,25 @@ What the binder deliberately does *not* check is whether a `CREATE TABLE`
 target already exists: execution performs that check, where it can be made
 atomically with the create. A `COPY` whose CSV file is missing binds too —
 file access is execution's concern.
+
+## Multi-table SELECT and joins (Exercise 10)
+
+`SELECT` now takes a `FROM` list and an `AND` conjunction. The AST keeps the
+two predicate shapes apart: `SelectStatement.filters()` holds
+`column op constant` and `SelectStatement.joins()` holds
+`JoinPredicate(leftColumn, rightColumn)`. Both lists keep their written
+order, and the printer emits filters first and then joins, so the round trip
+still restores an equal statement.
+
+Column names stay unqualified, so the binder resolves every name against
+the schemas of the whole `FROM` list through `ColumnResolver` (in
+`dk.itu.swandb.plan`), the same helper the planner uses. A name in no table
+is unknown; a name in two tables is ambiguous. A join must also resolve its
+two sides to different tables whose columns have the same `ColumnType`,
+because `HashJoinOperator` compares keys with Java `equals`: a `LONG` 3 and
+a `DOUBLE` 3.0 would never match, so the binder rejects that join instead of
+silently returning nothing. `DELETE` keeps the single-table, column-to-
+constant form.
 
 ## Printing
 

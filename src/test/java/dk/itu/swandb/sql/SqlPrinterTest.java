@@ -52,6 +52,24 @@ class SqlPrinterTest {
     }
 
     @Test
+    void tableListsAndAndChainsRoundTrip() {
+        assertRoundTrips(one("SELECT * FROM orders, customers WHERE o_custname = c_name;"));
+        assertRoundTrips(one("SELECT * FROM orders, customers, products, cities "
+                + "WHERE o_custname = c_name AND o_prodname = p_name AND c_city = ct_city;"));
+        assertRoundTrips(one("SELECT * FROM orders, customers "
+                + "WHERE o_quantity > 0 AND o_custname = c_name;"));
+        assertRoundTrips(one("SELECT * FROM orders, customers;"));
+    }
+
+    @Test
+    void joinsArePrintedAfterFiltersInAFixedOrder() {
+        assertEquals("SELECT * FROM orders, customers, products"
+                        + " WHERE o_quantity > 0 AND o_custname = c_name AND o_prodname = p_name;",
+                printer.print(one("select * from orders, customers, products "
+                        + "where o_custname = c_name and o_quantity > 0 and o_prodname = p_name;")));
+    }
+
+    @Test
     void printingNormalizesDelete() {
         assertEquals("DELETE FROM Trips WHERE City = 'Odense';",
                 printer.print(one("delete from Trips where City = 'Odense' ;")));

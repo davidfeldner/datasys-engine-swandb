@@ -11,7 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -40,8 +39,8 @@ class PlannerTest {
     void keepsExactlyThePartitionsThatCanMatch(@TempDir Path tmp) throws Exception {
         Planner planner = plannerOverSortedTrips(tmp);
 
-        Plan plan = planner.plan("trips",
-                Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L)));
+        Plan plan = planner.plan(
+                List.of(new Selection("distance", Comparison.GREATER_THAN, 200L)), List.of());
 
         assertStats(new ScanStats(4, 1, 3), plan.stats());
 
@@ -54,8 +53,8 @@ class PlannerTest {
     void aLessThanKeepsTheTwoLowerPartitions(@TempDir Path tmp) throws Exception {
         Planner planner = plannerOverSortedTrips(tmp);
 
-        Plan plan = planner.plan("trips",
-                Optional.of(new Selection("distance", Comparison.LESS_THAN, 100L)));
+        Plan plan = planner.plan(
+                List.of(new Selection("distance", Comparison.LESS_THAN, 100L)), List.of());
 
         assertStats(new ScanStats(4, 2, 2), plan.stats());
     }
@@ -64,8 +63,8 @@ class PlannerTest {
     void aFullyPrunedQueryPlansAnEmptyScanAndReadsNothing(@TempDir Path tmp) throws Exception {
         Planner planner = plannerOverSortedTrips(tmp);
 
-        Plan plan = planner.plan("trips",
-                Optional.of(new Selection("distance", Comparison.GREATER_THAN, 1000L)));
+        Plan plan = planner.plan(
+                List.of(new Selection("distance", Comparison.GREATER_THAN, 1000L)), List.of());
 
         assertStats(new ScanStats(4, 0, 4), plan.stats());
         assertEquals(List.of(), drain(plan.root()));
@@ -75,8 +74,8 @@ class PlannerTest {
     void aWhereBecomesAFilterOverAScan(@TempDir Path tmp) throws Exception {
         Planner planner = plannerOverSortedTrips(tmp);
 
-        Plan plan = planner.plan("trips",
-                Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L)));
+        Plan plan = planner.plan(
+                List.of(new Selection("distance", Comparison.GREATER_THAN, 200L)), List.of());
 
         assertInstanceOf(FilterOperator.class, plan.root());
     }
@@ -85,7 +84,7 @@ class PlannerTest {
     void noWhereBecomesABareScanOverEveryPartition(@TempDir Path tmp) throws Exception {
         Planner planner = plannerOverSortedTrips(tmp);
 
-        Plan plan = planner.plan("trips", Optional.empty());
+        Plan plan = planner.plan(List.of(), List.of());
 
         assertInstanceOf(ScanOperator.class, plan.root());
         assertStats(new ScanStats(4, 4, 0), plan.stats());
@@ -98,10 +97,11 @@ class PlannerTest {
         // Corrupt the pinned metadata: partition 0 no longer carries any summaries.
         List<Catalog.PartitionEntry> partitions = new ArrayList<>(table.partitions);
         partitions.set(0, summaryless(partitions.get(0)));
-        Planner planner = new Planner(table.columns, partitions, dataPath(tmp, table));
+        Planner planner = new Planner(List.of(
+                new Planner.TableInput("trips", table.columns, partitions, dataPath(tmp, table))));
 
-        IllegalStateException e = assertThrows(IllegalStateException.class, () -> planner.plan("trips",
-                Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L))));
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> planner.plan(
+                List.of(new Selection("distance", Comparison.GREATER_THAN, 200L)), List.of()));
         assertTrue(e.getMessage().contains("missing min/max summary"), e.getMessage());
     }
 
@@ -111,10 +111,11 @@ class PlannerTest {
         // Column 1 is distance; wipe only its lower bound.
         List<Catalog.PartitionEntry> partitions = new ArrayList<>(table.partitions);
         partitions.set(0, withNullDistanceMin(partitions.get(0)));
-        Planner planner = new Planner(table.columns, partitions, dataPath(tmp, table));
+        Planner planner = new Planner(List.of(
+                new Planner.TableInput("trips", table.columns, partitions, dataPath(tmp, table))));
 
-        assertThrows(IllegalStateException.class, () -> planner.plan("trips",
-                Optional.of(new Selection("distance", Comparison.GREATER_THAN, 200L))));
+        assertThrows(IllegalStateException.class, () -> planner.plan(
+                List.of(new Selection("distance", Comparison.GREATER_THAN, 200L)), List.of()));
     }
 
     private static Catalog.PartitionEntry summaryless(Catalog.PartitionEntry entry) {
@@ -131,7 +132,8 @@ class PlannerTest {
 
     private static Planner plannerOverSortedTrips(Path tmp) throws Exception {
         Catalog.TableEntry table = sortedTrips(tmp);
-        return new Planner(table.columns, table.partitions, dataPath(tmp, table));
+        return new Planner(List.of(
+                new Planner.TableInput("trips", table.columns, table.partitions, dataPath(tmp, table))));
     }
 
     private static Path dataPath(Path tmp, Catalog.TableEntry table) {
