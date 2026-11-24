@@ -45,12 +45,16 @@ public final class StorageEngine implements AutoCloseable {
     private final Path dataDir;
     private final int maxRowsPerPartition;
     private final Catalog catalog;
+    /** The join order this engine plans with; see {@link JoinMode}. */
+    private volatile JoinMode joinMode = JoinMode.OPTIMIZED;
     /** Schemas and version chains, one entry per table. */
     private final Map<String, VersionedTable> tables = new ConcurrentHashMap<>();
     /** Figures of the last SELECT, for the executor's summary line. */
     private volatile int lastReadVersion;
     private volatile int lastPartitionsRead;
     private volatile int lastPartitionsPruned;
+    /** The join order the last SELECT planned, as the planner described it. */
+    private volatile String lastJoinOrder = "";
     /** Serialises a table's commits: write the new partitions, then swap. */
     private final Map<String, Object> commitLocks = new ConcurrentHashMap<>();
 
@@ -170,6 +174,8 @@ public final class StorageEngine implements AutoCloseable {
             int end = Math.min(offset + maxRowsPerPartition, rows.size());
             List<Object[]> slice = rows.subList(offset, end);
             partitions.add(buildPartition(columns, slice));
+            // Summaries are logged once the commit succeeds: a partition the
+            // commit never appended must not claim its statistics exist.
             newEntries.add(summarize(columns, slice, newEntries.size(), -1));
         }
 
@@ -188,6 +194,10 @@ public final class StorageEngine implements AutoCloseable {
                 reindex(next);
                 version = commit(table, base, next);
             }
+        }
+
+        for (Catalog.PartitionEntry written : newEntries) {
+            logSummaries(tableName, written);
         }
 
         long durationMs = LogFormat.elapsedMs(start);
@@ -294,6 +304,9 @@ public final class StorageEngine implements AutoCloseable {
                     reindex(committed);
                     version = commit(table, base, committed);
                 }
+                for (Catalog.PartitionEntry written : rewriteEntries) {
+                    logSummaries(tableName, written);
+                }
             }
         }
 
@@ -323,6 +336,7 @@ public final class StorageEngine implements AutoCloseable {
                                  List<JoinCondition> joins) {
         long start = System.nanoTime();
         try (PinnedQuery query = openQuery(tableNames, filters, joins)) {
+            lastJoinOrder = query.joinOrder();
             List<Object[]> out = query.drain();
             lastReadVersion = query.version();
             lastPartitionsRead = query.stats().partitionsRead();
@@ -360,13 +374,16 @@ public final class StorageEngine implements AutoCloseable {
         try {
             List<Planner.TableInput> inputs = new ArrayList<>(tableNames.size());
             for (String tableName : tableNames) {
+                // Before the pin: the roll-forward may commit, and a pin taken
+                // first would then be one version behind.
+                rollForwardStatistics(tableName);
                 Catalog.TableEntry entry = entry(tableName);
                 VersionedTable.PinnedVersion version = versioned(tableName).begin();
                 pinned.add(version);
                 inputs.add(new Planner.TableInput(tableName, entry.columns, version.partitions(),
                         dataDir.resolve(entry.dataFile)));
             }
-            Plan plan = new Planner(inputs).plan(filters, joins);
+            Plan plan = new Planner(inputs, joinMode).plan(filters, joins);
             return new PinnedQuery(pinned, plan);
         } catch (RuntimeException e) {
             for (VersionedTable.PinnedVersion version : pinned) version.close();
@@ -396,6 +413,18 @@ public final class StorageEngine implements AutoCloseable {
         return lastReadVersion;
     }
 
+    /**
+     * Chooses how the next statements order their joins: optimized (the
+     * default) or the {@code FROM} list itself. The choice only affects the
+     * plan, never the rows or their column order.
+     */
+    public void setJoinMode(JoinMode mode) {
+        if (mode == null)
+            throw new IllegalArgumentException("join mode must not be null");
+        this.joinMode = mode;
+        LOGGER.debug("joinMode={}", mode.spelling());
+    }
+
     /** How many partitions the last {@code SELECT} read, and how many it pruned. */
     public int lastPartitionsRead() {
         return lastPartitionsRead;
@@ -403,6 +432,11 @@ public final class StorageEngine implements AutoCloseable {
 
     public int lastPartitionsPruned() {
         return lastPartitionsPruned;
+    }
+
+    /** The join order the last {@code SELECT} planned, or "" for a single table. */
+    public String lastJoinOrder() {
+        return lastJoinOrder;
     }
 
     /** Filtered scan over the binary store: the week 2 signature, now versioned. */
@@ -499,6 +533,86 @@ public final class StorageEngine implements AutoCloseable {
             ends.add(i + 1 < offsets.size() ? offsets.get(i + 1) : fileSize);
         }
         return ends;
+    }
+
+    // --- statistics roll-forward ----------------------------------------
+
+    /**
+     * Fills in the NDV of partitions whose catalog entry predates Exercise 11,
+     * as the design document's roll-forward step describes: scan each such
+     * partition once, count distinct values per column with the same
+     * {@link DistinctValues} logic {@code COPY} uses, persist the counts and
+     * discard the sets before moving to the next partition.
+     *
+     * <p>The fill is a normal commit, so it is versioned like any other write:
+     * readers on older versions keep seeing a catalog without the NDV, and a
+     * concurrent writer that commits first makes this one lose with a
+     * {@link ConflictException}, which is caught here — the query simply runs
+     * on the estimates the statistics it could read allow. The cost is one
+     * partition read per legacy partition, on the first statement that opens
+     * the table; every later statement reads the persisted NDVs.
+     */
+    private void rollForwardStatistics(String tableName) {
+        VersionedTable table = versioned(tableName);
+        List<Catalog.PartitionEntry> pinned = table.newest().partitions();
+        List<Integer> missing = new ArrayList<>();
+        for (int i = 0; i < pinned.size(); i++) {
+            if (!hasNdv(pinned.get(i))) missing.add(i);
+        }
+        if (missing.isEmpty()) return;
+
+        List<ColumnSpec> columns = entry(tableName).columns;
+        Catalog.TableEntry entry = entry(tableName);
+        long start = System.nanoTime();
+        int filled = 0;
+        try (VersionedTable.PinnedVersion base = table.begin()) {
+            int baseVersion = base.number();
+            List<Catalog.PartitionEntry> next = new ArrayList<>(base.partitions());
+            for (int i : missing) {
+                Catalog.PartitionEntry partition = next.get(i);
+                Catalog.PartitionEntry completion = withNdvs(
+                        partition, readRows(tableName, partition, columns));
+                next.set(i, completion);
+                logSummaries(tableName, completion);
+                filled++;
+            }
+            synchronized (lock(tableName)) {
+                table.validate(baseVersion);
+                commit(table, baseVersion, next);
+            }
+        } catch (ConflictException | StaleVersionException e) {
+            LOGGER.debug("table={} rollForward=skipped error={}",
+                    LogFormat.sanitize(tableName), e.getClass().getSimpleName());
+            return;
+        }
+        LOGGER.debug("table={} partitionsScanned={} version={} durationMs={}",
+                LogFormat.sanitize(tableName), filled, table.newestNumber(),
+                LogFormat.elapsedMs(start));
+    }
+
+    /** Whether every column summary of the partition records an NDV. */
+    private static boolean hasNdv(Catalog.PartitionEntry partition) {
+        for (Catalog.ColumnSummary summary : partition.columns) {
+            if (!summary.hasNdv()) return false;
+        }
+        return true;
+    }
+
+    /**
+     * The partition's entry with every missing NDV counted from its rows. The
+     * entry is copied, never edited: older versions share it.
+     */
+    private static Catalog.PartitionEntry withNdvs(Catalog.PartitionEntry partition,
+                                                   List<Object[]> rows) {
+        Catalog.PartitionEntry out = partition.copy();
+        for (int c = 0; c < out.columns.size(); c++) {
+            Catalog.ColumnSummary summary = out.columns.get(c);
+            if (summary.hasNdv()) continue;
+            List<Object> values = new ArrayList<>(rows.size());
+            for (Object[] row : rows) values.add(row[c]);
+            summary.ndv = DistinctValues.count(values);
+        }
+        return out;
     }
 
     // --- helpers -------------------------------------------------------
@@ -601,6 +715,10 @@ public final class StorageEngine implements AutoCloseable {
         return new SwanFile.Partition(rows.size(), cols);
     }
 
+    /**
+     * One partition's catalog entry: for every column its min/max pruning
+     * range and its exact NDV, the two statistics the planner estimates with.
+     */
     private static Catalog.PartitionEntry summarize(List<ColumnSpec> schema, List<Object[]> rows,
                                                     int index, long offset) {
         List<Catalog.ColumnSummary> summaries = new ArrayList<>(schema.size());
@@ -608,10 +726,27 @@ public final class StorageEngine implements AutoCloseable {
             List<Object> values = new ArrayList<>(rows.size());
             for (Object[] row : rows) values.add(row[c]);
             MinMax.Result mm = MinMax.compute(schema.get(c).type(), values);
-            summaries.add(new Catalog.ColumnSummary(schema.get(c).name(), schema.get(c).type(), mm.min(), mm.max()));
+            summaries.add(new Catalog.ColumnSummary(schema.get(c).name(), schema.get(c).type(),
+                    mm.min(), mm.max(), DistinctValues.count(values)));
         }
         Catalog.PartitionEntry entry = new Catalog.PartitionEntry(index, rows.size(), summaries);
         entry.offset = offset;
         return entry;
+    }
+
+    /**
+     * One log line per column of a partition whose summary was just created,
+     * min/max and NDV in the one line Exercise 11 asks for:
+     * {@code table=orders partition=3 column=o_custname rows=1000 ndv=997}.
+     */
+    private static void logSummaries(String tableName, Catalog.PartitionEntry partition) {
+        for (Catalog.ColumnSummary summary : partition.columns) {
+            LOGGER.debug(
+                    "table={} partition={} column={} rows={} min={} max={} ndv={}",
+                    LogFormat.sanitize(tableName), partition.index(),
+                    LogFormat.sanitize(summary.name()), partition.rowCount(),
+                    LogFormat.sanitize(summary.min()), LogFormat.sanitize(summary.max()),
+                    summary.hasNdv() ? summary.ndv() : "missing");
+        }
     }
 }
