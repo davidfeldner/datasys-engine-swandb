@@ -1,11 +1,12 @@
 package dk.itu.swandb;
 
+import static dk.itu.swandb.TestSupport.TRIPS_SCHEMA;
+import static dk.itu.swandb.TestSupport.copyResource;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -27,21 +28,6 @@ import dk.itu.swandb.enums.Comparison;
  * Runs under the Failsafe plugin (mvn verify), not Surefire.
  */
 class StorageEngineIT {
-
-    private static final List<ColumnSpec> TRIPS_SCHEMA = List.of(
-            new ColumnSpec("city", ColumnType.STRING),
-            new ColumnSpec("distance", ColumnType.LONG),
-            new ColumnSpec("price", ColumnType.DOUBLE));
-
-    private static Path copyResource(@TempDir Path tmp, String resourceName) throws Exception {
-        Path target = tmp.resolve(resourceName);
-        try (InputStream in = StorageEngineIT.class.getClassLoader()
-                .getResourceAsStream(resourceName)) {
-            assertTrue(in != null, "missing test resource " + resourceName);
-            Files.write(target, in.readAllBytes());
-        }
-        return target;
-    }
 
     @Test
     void schemaPersistsAcrossRestart(@TempDir Path tmp) throws Exception {

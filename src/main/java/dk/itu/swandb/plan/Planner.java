@@ -3,7 +3,7 @@ package dk.itu.swandb.plan;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,142 +13,215 @@ import dk.itu.swandb.ColumnSpec;
 import dk.itu.swandb.LogFormat;
 import dk.itu.swandb.Pruning;
 import dk.itu.swandb.ScanStats;
-import dk.itu.swandb.enums.Comparison;
+import dk.itu.swandb.plan.ColumnResolver.ResolvedColumn;
 
 /**
- * Turns a pinned table version plus an optional {@link Selection} into an
- * operator tree, and this is where partition pruning happens.
+ * Turns pinned table versions plus the statement's filters and join
+ * predicates into an operator tree. This is where partition pruning happens.
  *
- * <p>Since Exercise 7 the planner does not read the catalog: it is handed
- * the schema and the partition list of the version the statement pinned, so
- * nothing can change underneath a running statement. Every pruning decision
- * is still made from min/max summaries alone, before any data file is
- * opened. Partitions that may match survive into a {@link ScanOperator}; the
- * pruned ones never reach it. A {@code WHERE} wraps that scan in a
- * {@link FilterOperator}; no {@code WHERE} leaves a bare scan over every
- * partition.
+ * <p>One pipeline is built per table, exactly as in Part 1: a
+ * {@link ScanOperator} over the partitions that survive pruning, wrapped in
+ * one {@link FilterOperator} per filter bound to that table. Pruning still
+ * works per table because each filter binds to exactly one table.
  *
- * <p>The decision itself is {@link Pruning#decide}, the same answer
- * {@code DELETE} uses to choose its rewrite set, so the two can never
- * disagree about a partition.
+ * <p>The {@code FROM} list is then folded left to right. For each new table
+ * the planner finds the join predicate that connects it to the tables
+ * already joined and adds
+ * {@code HashJoinOperator(joinedSoFar, newTable, buildKey, probeKey)}: the
+ * intermediate result is the build side and the new table probes. That
+ * order is deliberately naive — week 11 optimizes it — and because output
+ * rows are build columns followed by probe columns, {@code SELECT *} emits
+ * columns in {@code FROM}-list order.
+ *
+ * <p><b>More than one connecting predicate.</b> A table may be connected to
+ * the tables before it by at most one join predicate. If a query supplies a
+ * second one, the planner rejects it with an {@link IllegalArgumentException}
+ * rather than silently ignoring it: applying it as an extra filter on the
+ * join output is deliberately out of scope this week.
  */
 public final class Planner {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(Planner.class);
 
-    private final List<ColumnSpec> columns;
-    private final List<Catalog.PartitionEntry> partitions;
-    private final Path dataPath;
-
     /**
-     * @param columns    the schema of the pinned version, in column order
-     * @param partitions the partition list of the pinned version
-     * @param dataPath   the table's single data file
+     * One table's pinned inputs. Since Exercise 7 the planner does not read
+     * the catalog: it is handed the schema and the partition list of the
+     * version the statement pinned, so nothing can change underneath a
+     * running statement.
      */
-    public Planner(List<ColumnSpec> columns, List<Catalog.PartitionEntry> partitions, Path dataPath) {
-        this.columns = List.copyOf(columns);
-        this.partitions = List.copyOf(partitions);
-        this.dataPath = dataPath;
+    public record TableInput(String tableName, List<ColumnSpec> columns,
+            List<Catalog.PartitionEntry> partitions, Path dataPath) {
+
+        public TableInput {
+            Objects.requireNonNull(tableName, "tableName");
+            columns = List.copyOf(Objects.requireNonNull(columns, "columns"));
+            partitions = List.copyOf(Objects.requireNonNull(partitions, "partitions"));
+            Objects.requireNonNull(dataPath, "dataPath");
+        }
+    }
+
+    private final List<TableInput> tables;
+
+    /** @param tables the pinned tables in {@code FROM}-list order */
+    public Planner(List<TableInput> tables) {
+        Objects.requireNonNull(tables, "tables");
+        if (tables.isEmpty())
+            throw new IllegalArgumentException("a plan needs at least one table");
+        this.tables = List.copyOf(tables);
     }
 
     /**
-     * Plans a scan. An empty {@code where} reads every partition; a present
-     * one is pruned per partition and then applied as a filter. Throws
-     * {@link IllegalArgumentException} for an unknown column or a constant
-     * whose type does not match the column.
+     * Plans the statement's tables, filters and joins.
+     *
+     * @param filters the filters of every table, in statement order
+     * @param joins   the join predicates, in statement order
+     * @throws IllegalArgumentException for an unknown or ambiguous column, a
+     *         constant whose type does not match, an unconnected table, or a
+     *         table connected by more than one predicate
      */
-    public Plan plan(String tableName, Optional<Selection> where) {
+    public Plan plan(List<Selection> filters, List<JoinCondition> joins) {
         long start = System.nanoTime();
         try {
-            Plan plan = where.isEmpty()
-                    ? planBareScan(tableName)
-                    : planFilteredScan(tableName, where.get());
-            LOGGER.debug("table={} partitionsTotal={} partitionsRead={} partitionsPruned={} durationMs={}",
-                    LogFormat.sanitize(tableName), plan.stats().partitionsTotal(),
-                    plan.stats().partitionsRead(), plan.stats().partitionsPruned(),
-                    elapsedMs(start));
-            return plan;
+            ColumnResolver resolver = new ColumnResolver(
+                    tables.stream().map(TableInput::tableName).toList(),
+                    tables.stream().map(TableInput::columns).toList());
+
+            List<List<BoundFilter>> filtersByTable = bindFilters(resolver, filters);
+            List<Operator> pipelines = new ArrayList<>(tables.size());
+            ScanStats total = new ScanStats(0, 0, 0);
+            for (int i = 0; i < tables.size(); i++) {
+                Plan tablePlan = planTable(tables.get(i), filtersByTable.get(i));
+                pipelines.add(tablePlan.root());
+                total = total.plus(tablePlan.stats());
+            }
+
+            Operator joined = pipelines.get(0);
+            for (int i = 1; i < pipelines.size(); i++) {
+                JoinKey key = connectingKey(resolver, joins, i);
+                joined = new HashJoinOperator(joined, pipelines.get(i), key.buildKey(), key.probeKey());
+            }
+
+            LOGGER.debug(
+                    "tables={} joins={} partitionsTotal={} partitionsRead={} partitionsPruned={} durationMs={}",
+                    tables.size(), joins.size(), total.partitionsTotal(), total.partitionsRead(),
+                    total.partitionsPruned(), LogFormat.elapsedMs(start));
+            return new Plan(joined, total);
         } catch (RuntimeException e) {
-            LOGGER.debug("table={} error={} durationMs={}",
-                    LogFormat.sanitize(tableName), e.getClass().getSimpleName(), elapsedMs(start));
+            LOGGER.debug("tables={} error={} durationMs={}",
+                    tables.size(), e.getClass().getSimpleName(), LogFormat.elapsedMs(start));
             throw e;
         }
     }
 
-    private Plan planBareScan(String tableName) {
-        for (Catalog.PartitionEntry partition : partitions) {
-            LOGGER.debug("table={} partition={} decision={}",
-                    LogFormat.sanitize(tableName), partition.index(), "READ");
+    private List<List<BoundFilter>> bindFilters(ColumnResolver resolver, List<Selection> filters) {
+        List<List<BoundFilter>> byTable = new ArrayList<>();
+        for (int i = 0; i < tables.size(); i++) {
+            byTable.add(new ArrayList<>());
         }
-        Operator scan = new ScanOperator(dataPath, columns, partitions);
-        return new Plan(scan, new ScanStats(partitions.size(), partitions.size(), 0));
+        for (Selection filter : filters) {
+            ResolvedColumn column = resolver.resolve(filter.columnName());
+            column.column().requireConstant(filter.constant());
+            byTable.get(column.tableIndex()).add(new BoundFilter(filter, column));
+        }
+        return byTable;
     }
 
-    private Plan planFilteredScan(String tableName, Selection selection) {
-        int columnIndex = columnIndex(selection.columnName());
-        ColumnSpec filterColumn = columns.get(columnIndex);
-        validateConstant(filterColumn, selection.constant());
-
+    /**
+     * One table's pipeline: pruning first, then the filters below the joins.
+     * A partition is pruned as soon as any filter on this table proves it
+     * free, because all filters are ANDed together.
+     */
+    private static Plan planTable(TableInput table, List<BoundFilter> filters) {
         List<Catalog.PartitionEntry> survivors = new ArrayList<>();
         int pruned = 0;
-        for (Catalog.PartitionEntry partition : partitions) {
-            Catalog.ColumnSummary summary = summary(partition, selection.columnName());
-            // Never prune on missing metadata: a partition that is never read
-            // can never be recovered by the filter below, so an incomplete
-            // catalog would silently drop matching rows. Fail loudly instead.
-            if (summary == null || summary.min() == null || summary.max() == null)
-                throw new IllegalStateException("missing min/max summary for column "
-                        + selection.columnName() + " in partition " + partition.index()
-                        + " of table " + tableName + "; refusing to prune on incomplete catalog metadata");
-            Object min = summary.min();
-            Object max = summary.max();
-            Pruning.Decision decision = Pruning.decide(selection.comparison(), selection.constant(),
-                    min, max, filterColumn.type());
-            LOGGER.debug(
-                    "table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                    LogFormat.sanitize(tableName), LogFormat.sanitize(selection.columnName()),
-                    selection.comparison(), LogFormat.sanitize(selection.constant()),
-                    partition.index(), LogFormat.sanitize(min), LogFormat.sanitize(max),
-                    decision == Pruning.Decision.PROVABLY_FREE ? "PRUNED" : "READ");
-            if (decision == Pruning.Decision.PROVABLY_FREE)
-                pruned++;
-            else
-                survivors.add(partition);
+        for (Catalog.PartitionEntry partition : table.partitions()) {
+            boolean provablyFree = false;
+            for (BoundFilter filter : filters) {
+                String columnName = filter.column().column().name();
+                Catalog.ColumnSummary summary = partition.summary(columnName);
+                // Never prune on missing metadata: a partition that is never
+                // read can never be recovered by the filter below.
+                if (summary == null || summary.min() == null || summary.max() == null)
+                    throw new IllegalStateException("missing min/max summary for column "
+                            + columnName + " in partition " + partition.index()
+                            + " of table " + table.tableName()
+                            + "; refusing to prune on incomplete catalog metadata");
+                Pruning.Decision decision = Pruning.decide(filter.selection().comparison(),
+                        filter.selection().constant(), summary.min(), summary.max(),
+                        filter.column().column().type());
+                LOGGER.debug(
+                        "table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
+                        LogFormat.sanitize(table.tableName()), LogFormat.sanitize(columnName),
+                        filter.selection().comparison(), LogFormat.sanitize(filter.selection().constant()),
+                        partition.index(), LogFormat.sanitize(summary.min()),
+                        LogFormat.sanitize(summary.max()),
+                        decision == Pruning.Decision.PROVABLY_FREE ? "PRUNED" : "READ");
+                if (decision == Pruning.Decision.PROVABLY_FREE) {
+                    provablyFree = true;
+                    break;
+                }
+            }
+            if (provablyFree) pruned++;
+            else survivors.add(partition);
         }
 
-        Operator scan = new ScanOperator(dataPath, columns, survivors);
-        Operator root = new FilterOperator(scan, columnIndex, filterColumn,
-                selection.comparison(), selection.constant());
-        return new Plan(root, new ScanStats(partitions.size(), survivors.size(), pruned));
-    }
-
-    /** Index of the column the selection names, or {@link IllegalArgumentException}. */
-    public int columnIndex(String columnName) {
-        for (int i = 0; i < columns.size(); i++) {
-            if (columns.get(i).name().equals(columnName))
-                return i;
+        Operator root = new ScanOperator(table.dataPath(), table.columns(), survivors);
+        for (BoundFilter filter : filters) {
+            root = new FilterOperator(root, filter.column().tableColumnIndex(),
+                    filter.column().column(), filter.selection().comparison(),
+                    filter.selection().constant());
         }
-        throw new IllegalArgumentException("unknown column: " + columnName);
+
+        ScanStats stats = new ScanStats(table.partitions().size(), survivors.size(), pruned);
+        LOGGER.debug("table={} filters={} partitionsTotal={} partitionsRead={} partitionsPruned={}",
+                LogFormat.sanitize(table.tableName()), filters.size(), stats.partitionsTotal(),
+                stats.partitionsRead(), stats.partitionsPruned());
+        return new Plan(root, stats);
     }
 
-    private static Catalog.ColumnSummary summary(Catalog.PartitionEntry partition, String columnName) {
-        for (Catalog.ColumnSummary summary : partition.columns) {
-            if (summary.name().equals(columnName))
-                return summary;
+    /**
+     * The one join predicate that connects {@code newTable} to a table before
+     * it. Its build side key indexes the intermediate result, which is the
+     * concatenation of tables {@code 0..newTable-1}; its probe key indexes the
+     * new table's own row.
+     */
+    private JoinKey connectingKey(ColumnResolver resolver, List<JoinCondition> joins, int newTable) {
+        JoinKey found = null;
+        String newTableName = tables.get(newTable).tableName();
+        for (JoinCondition join : joins) {
+            ResolvedColumn left = resolver.resolve(join.leftColumn());
+            ResolvedColumn right = resolver.resolve(join.rightColumn());
+
+            ResolvedColumn build;
+            ResolvedColumn probe;
+            if (left.tableIndex() == newTable && right.tableIndex() < newTable) {
+                probe = left;
+                build = right;
+            } else if (right.tableIndex() == newTable && left.tableIndex() < newTable) {
+                probe = right;
+                build = left;
+            } else {
+                // Either both sides are already joined (used by an earlier
+                // step) or the other side comes later; wait for that table.
+                continue;
+            }
+
+            if (found != null)
+                throw new IllegalArgumentException("table " + newTableName
+                        + " is connected by more than one join predicate; only one "
+                        + "connecting predicate per new table is supported");
+            found = new JoinKey(build.rowIndex(), probe.tableColumnIndex());
         }
-        return null;
+        if (found == null)
+            throw new IllegalArgumentException("no join predicate connects table " + newTableName
+                    + " to the tables before it in the FROM list; reorder the FROM list");
+        return found;
     }
 
-    private static void validateConstant(ColumnSpec column, Object constant) {
-        if (constant == null)
-            throw new IllegalArgumentException("constant must not be null");
-        if (!column.type().accepts(constant))
-            throw new IllegalArgumentException(
-                    "constant type mismatch for column " + column.name()
-                            + ": expected " + column.type() + " got " + constant.getClass().getSimpleName());
+
+    private record BoundFilter(Selection selection, ResolvedColumn column) {
     }
 
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
+    private record JoinKey(int buildKey, int probeKey) {
     }
 }

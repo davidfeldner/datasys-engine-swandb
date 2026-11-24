@@ -6,12 +6,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import dk.itu.swandb.LogFormat;
 import dk.itu.swandb.Result;
 import dk.itu.swandb.StorageEngine;
+import dk.itu.swandb.plan.JoinCondition;
 import dk.itu.swandb.plan.Selection;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
 import dk.itu.swandb.sql.ast.DeleteStatement;
+import dk.itu.swandb.sql.ast.JoinPredicate;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -80,13 +83,13 @@ public final class Executor {
         try {
             binder.bind(statement);
             Result result = run(statement);
-            logSummary(statement, result, elapsedMs(start));
+            logSummary(statement, result, LogFormat.elapsedMs(start));
             return result.rowsOut();
         } catch (RuntimeException e) {
             LOGGER.error("statement={} table={} failed reason={} durationMs={}",
-                    kind(statement), table(statement),
+                    kind(statement), LogFormat.sanitize(table(statement)),
                     e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage().replace(',', ';'),
-                    elapsedMs(start));
+                    LogFormat.elapsedMs(start));
             throw e;
         }
     }
@@ -97,17 +100,27 @@ public final class Executor {
                     engine.createTable(createTable.tableName(), createTable.columns());
             case CopyStatement copy -> engine.copyFile(copy.tableName(), copy.csvFilePath());
             case SelectStatement select -> {
-                List<Object[]> rows = engine.select(select.tableName(), selection(select.where()));
+                List<Selection> filters = select.filters().stream()
+                        .map(Executor::selection)
+                        .toList();
+                List<JoinCondition> joins = select.joins().stream()
+                        .map(Executor::joinCondition)
+                        .toList();
+                List<Object[]> rows = engine.select(select.tableNames(), filters, joins);
                 yield Result.selected(engine.lastReadVersion(), rows,
                         engine.lastPartitionsRead(), engine.lastPartitionsPruned());
             }
-            case DeleteStatement delete -> engine.delete(delete.tableName(), selection(delete.where()));
+            case DeleteStatement delete ->
+                    engine.delete(delete.tableName(), delete.where().map(Executor::selection));
         };
     }
 
-    /** The AST's optional predicate as the storage-level selection. */
-    private static java.util.Optional<Selection> selection(java.util.Optional<Predicate> where) {
-        return where.map(p -> new Selection(p.columnName(), p.comparison(), p.constant()));
+    private static Selection selection(Predicate predicate) {
+        return new Selection(predicate.columnName(), predicate.comparison(), predicate.constant());
+    }
+
+    private static JoinCondition joinCondition(JoinPredicate join) {
+        return new JoinCondition(join.leftColumn(), join.rightColumn());
     }
 
     /** One line per statement, carrying the version it committed or read. */
@@ -126,8 +139,9 @@ public final class Executor {
                     result.partitionsCarried(), result.version(), durationMs);
             case SelectStatement s -> LOGGER.debug(
                     "statement={} table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                    kind(statement), s.tableName(), result.rows(), result.partitionsRead(),
-                    result.partitionsPruned(), result.version(), durationMs);
+                    kind(statement), LogFormat.sanitize(String.join(",", s.tableNames())),
+                    result.rows(), result.partitionsRead(), result.partitionsPruned(),
+                    result.version(), durationMs);
         }
     }
 
@@ -144,14 +158,11 @@ public final class Executor {
         return switch (statement) {
             case CreateTableStatement s -> s.tableName();
             case CopyStatement s -> s.tableName();
-            case SelectStatement s -> s.tableName();
+            case SelectStatement s -> String.join(",", s.tableNames());
             case DeleteStatement s -> s.tableName();
         };
     }
 
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
-    }
 
     /** Receives each statement's rows as the script runs. */
     @FunctionalInterface

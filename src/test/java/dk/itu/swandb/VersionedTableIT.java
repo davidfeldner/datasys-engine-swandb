@@ -1,10 +1,10 @@
 package dk.itu.swandb;
 
+import static dk.itu.swandb.TestSupport.TRIPS_SCHEMA;
+import static dk.itu.swandb.TestSupport.copyResource;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -14,7 +14,6 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.enums.Comparison;
 import dk.itu.swandb.plan.Selection;
 
@@ -25,11 +24,6 @@ import dk.itu.swandb.plan.Selection;
  * sees after a restart. Runs under the Failsafe plugin (mvn verify).
  */
 class VersionedTableIT {
-
-    private static final List<ColumnSpec> TRIPS_SCHEMA = List.of(
-            new ColumnSpec("city", ColumnType.STRING),
-            new ColumnSpec("distance", ColumnType.LONG),
-            new ColumnSpec("price", ColumnType.DOUBLE));
 
     // --- 3. versions ---------------------------------------------------
 
@@ -263,15 +257,5 @@ class VersionedTableIT {
         List<Long> offsets = new ArrayList<>();
         for (Catalog.PartitionEntry partition : table.partitions) offsets.add(partition.offset());
         return offsets;
-    }
-
-    private static Path copyResource(Path tmp, String resourceName) throws Exception {
-        Path target = tmp.resolve(resourceName);
-        try (InputStream in = VersionedTableIT.class.getClassLoader()
-                .getResourceAsStream(resourceName)) {
-            assertNotNull(in, "missing test resource " + resourceName);
-            Files.write(target, in.readAllBytes());
-        }
-        return target;
     }
 }

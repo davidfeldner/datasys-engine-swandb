@@ -89,12 +89,12 @@ public final class Engine {
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             System.err.println("error: " + message);
             LOGGER.error("engine failed reason={} durationMs={}",
-                    LogFormat.sanitize(message), elapsedMs(start));
+                    LogFormat.sanitize(message), LogFormat.elapsedMs(start));
             return 1;
         } finally {
             // Back to 0 so the stop line is outside any statement's count.
             MDC.put("statementNumber", "0");
-            LOGGER.debug("engine stopped durationMs={}", elapsedMs(start));
+            LOGGER.debug("engine stopped durationMs={}", LogFormat.elapsedMs(start));
             MDC.remove("statementNumber");
             MDC.remove("sessionId");
         }
@@ -162,9 +162,5 @@ public final class Engine {
             throw new IllegalArgumentException(
                     MAX_ROWS_PER_PARTITION_PROPERTY + " must be > 0: " + raw);
         return value;
-    }
-
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 }

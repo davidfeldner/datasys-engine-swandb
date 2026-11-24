@@ -16,6 +16,7 @@ import dk.itu.swandb.enums.Comparison;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
 import dk.itu.swandb.sql.ast.DeleteStatement;
+import dk.itu.swandb.sql.ast.JoinPredicate;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -60,15 +61,47 @@ class SqlParserTest {
     void selectWithWhereParsesToExpectedAst() {
         List<Statement> statements = parser.parse("SELECT * FROM trips WHERE distance > 100;");
 
-        assertEquals(List.of(new SelectStatement("trips",
-                Optional.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)))), statements);
+        assertEquals(List.of(new SelectStatement(List.of("trips"),
+                List.of(new Predicate("distance", Comparison.GREATER_THAN, 100L)), List.of())),
+                statements);
     }
 
     @Test
     void selectWithoutWhereParsesToExpectedAst() {
         List<Statement> statements = parser.parse("SELECT * FROM trips;");
 
-        assertEquals(List.of(new SelectStatement("trips", Optional.empty())), statements);
+        assertEquals(List.of(new SelectStatement(List.of("trips"), List.of(), List.of())), statements);
+    }
+
+    @Test
+    void aTableListAndAndChainSeparateFiltersFromJoins() {
+        List<Statement> statements = parser.parse("""
+                SELECT * FROM orders, customers, products
+                WHERE o_custname = c_name AND o_prodname = p_name AND o_quantity > 0;
+                """);
+
+        assertEquals(List.of(new SelectStatement(
+                List.of("orders", "customers", "products"),
+                List.of(new Predicate("o_quantity", Comparison.GREATER_THAN, 0L)),
+                List.of(new JoinPredicate("o_custname", "c_name"),
+                        new JoinPredicate("o_prodname", "p_name")))), statements);
+    }
+
+    @Test
+    void aFilterWrittenBeforeAJoinStillLandsInTheFilterList() {
+        SelectStatement select = assertInstanceOf(SelectStatement.class,
+                parser.parse("SELECT * FROM orders, customers "
+                        + "WHERE o_quantity > 0 AND o_custname = c_name;").get(0));
+
+        assertEquals(List.of(new Predicate("o_quantity", Comparison.GREATER_THAN, 0L)),
+                select.filters());
+        assertEquals(List.of(new JoinPredicate("o_custname", "c_name")), select.joins());
+    }
+
+    @Test
+    void aDeleteCannotCarryAColumnToColumnPredicate() {
+        assertThrows(SqlParseException.class,
+                () -> parser.parse("DELETE FROM orders WHERE o_orderkey = o_quantity;"));
     }
 
     @Test
@@ -130,7 +163,7 @@ class SqlParserTest {
                         new ColumnSpec("distance", ColumnType.LONG),
                         new ColumnSpec("price", ColumnType.DOUBLE))),
                 new CopyStatement("trips", "trips.csv"),
-                new SelectStatement("trips", Optional.empty())),
+                new SelectStatement(List.of("trips"), List.of(), List.of())),
                 parser.parse(TRIPS_SCRIPT));
     }
 
@@ -167,7 +200,7 @@ class SqlParserTest {
 
     @Test
     void keywordsAreCaseInsensitiveAndIdentifierCaseSurvives() {
-        assertEquals(List.of(new SelectStatement("Trips", Optional.empty())),
+        assertEquals(List.of(new SelectStatement(List.of("Trips"), List.of(), List.of())),
                 parser.parse("select * from Trips ;"));
 
         // Type names are keywords too, so 'string' is STRING; the column name
@@ -262,7 +295,7 @@ class SqlParserTest {
 
     @Test
     void commentBeforeTheSemicolonIsSkipped() {
-        assertEquals(List.of(new SelectStatement("trips", Optional.empty())),
+        assertEquals(List.of(new SelectStatement(List.of("trips"), List.of(), List.of())),
                 parser.parse("SELECT * FROM trips -- every row\n;"));
     }
 
@@ -280,7 +313,9 @@ class SqlParserTest {
     private Predicate predicateOf(String sql) {
         List<Statement> statements = parser.parse(sql);
         SelectStatement select = assertInstanceOf(SelectStatement.class, statements.get(0), sql);
-        return select.where().orElseThrow(() -> new AssertionError("no WHERE in " + sql));
+        if (select.filters().isEmpty())
+            throw new AssertionError("no filter in " + sql);
+        return select.filters().get(0);
     }
 
     private Object constantOf(String sql) {
