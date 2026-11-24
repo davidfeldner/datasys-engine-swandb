@@ -108,7 +108,8 @@ public final class Executor {
                         .toList();
                 List<Object[]> rows = engine.select(select.tableNames(), filters, joins);
                 yield Result.selected(engine.lastReadVersion(), rows,
-                        engine.lastPartitionsRead(), engine.lastPartitionsPruned());
+                        engine.lastPartitionsRead(), engine.lastPartitionsPruned(),
+                        engine.lastJoinOrder());
             }
             case DeleteStatement delete ->
                     engine.delete(delete.tableName(), delete.where().map(Executor::selection));
@@ -138,11 +139,28 @@ public final class Executor {
                     kind(statement), s.tableName(), result.rows(), result.partitionsRewritten(),
                     result.partitionsCarried(), result.version(), durationMs);
             case SelectStatement s -> LOGGER.debug(
-                    "statement={} table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                    "statement={} table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} joinOrder={} mode={} durationMs={}",
                     kind(statement), LogFormat.sanitize(String.join(",", s.tableNames())),
                     result.rows(), result.partitionsRead(), result.partitionsPruned(),
-                    result.version(), durationMs);
+                    result.version(), orderOf(result), result.joinOrder().isEmpty() ? "-" : modeOf(result),
+                    durationMs);
         }
+    }
+
+    /** The chosen order alone, for the summary line; {@code -} when not a join. */
+    private static String orderOf(Result result) {
+        String order = result.joinOrder();
+        int end = order.indexOf(" mode=");
+        return LogFormat.sanitize(end < 0 ? order : order.substring("joinOrder=".length(), end));
+    }
+
+    /** The mode word of the join-order line. */
+    private static String modeOf(Result result) {
+        String order = result.joinOrder();
+        int start = order.indexOf("mode=");
+        if (start < 0) return "-";
+        int end = order.indexOf(' ', start);
+        return end < 0 ? order.substring(start + "mode=".length()) : order.substring(start + "mode=".length(), end);
     }
 
     private static String kind(Statement statement) {

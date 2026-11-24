@@ -1,7 +1,9 @@
 package dk.itu.swandb.plan;
 
 import static dk.itu.swandb.plan.OperatorAssertions.drain;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -17,15 +19,17 @@ import org.junit.jupiter.api.io.TempDir;
 
 import dk.itu.swandb.Catalog;
 import dk.itu.swandb.ColumnSpec;
+import dk.itu.swandb.JoinMode;
 import dk.itu.swandb.ScanStats;
 import dk.itu.swandb.StorageEngine;
 import dk.itu.swandb.enums.ColumnType;
 import dk.itu.swandb.enums.Comparison;
 
 /**
- * The Exercise 10 planner: per-table pipelines with pruning stay below the
- * joins, and the {@code FROM} list folds left to right into three hash joins
- * for four tables. The testbed is the exercise's hand-checkable dataset.
+ * The Exercise 10 plan, kept reachable as {@code -j syntax}: per-table
+ * pipelines with pruning stay below the joins, and the {@code FROM} list
+ * folds left to right into three hash joins for four tables. The testbed is
+ * the exercise's hand-checkable dataset.
  */
 class JoinPlannerTest {
 
@@ -52,44 +56,35 @@ class JoinPlannerTest {
 
     @Test
     void fourTablesFoldIntoThreeLeftDeepHashJoinsInFromOrder(@TempDir Path tmp) throws Exception {
-        Planner planner = testbedPlanner(tmp);
+        Planner planner = testbedPlanner(tmp, JoinMode.SYNTAX);
 
         Plan plan = planner.plan(List.of(), FOUR_TABLE_JOINS);
 
-        HashJoinOperator cities = assertInstanceOf(HashJoinOperator.class, plan.root());
-        HashJoinOperator products = assertInstanceOf(HashJoinOperator.class, cities.build());
-        HashJoinOperator customers = assertInstanceOf(HashJoinOperator.class, products.build());
-
-        assertInstanceOf(ScanOperator.class, customers.build(), "orders is the first pipeline");
-        assertInstanceOf(ScanOperator.class, customers.probe(), "customers probes");
-        assertInstanceOf(ScanOperator.class, products.probe(), "products probes");
-        assertInstanceOf(ScanOperator.class, cities.probe(), "cities probes");
-
-        // Build keys index the intermediate row; probe keys index the new table.
-        assertEquals(1, customers.buildKey(), "o_custname in the orders row");
-        assertEquals(0, customers.probeKey(), "c_name in the customers row");
-        assertEquals(2, products.buildKey(), "o_prodname in the orders+customers row");
-        assertEquals(0, products.probeKey(), "p_name in the products row");
-        assertEquals(5, cities.buildKey(), "c_city in the orders+customers+products row");
-        assertEquals(0, cities.probeKey(), "ct_city in the cities row");
+        // The Exercise 10 shape survives as -j syntax: three hash joins whose
+        // added tables follow the FROM list, whatever side each builds on.
+        assertEquals(3, countJoins(plan.root()));
+        assertEquals("joinOrder=orders,customers,products,cities mode=syntax",
+                plan.joinOrder().split(" estRows")[0]);
 
         assertEquals(new ScanStats(6, 6, 0), plan.stats());
-        assertEquals(4, drain(plan.root()).size(), "one row per order");
+        List<Object[]> rows = drain(plan.root());
+        assertEquals(4, rows.size(), "one row per order");
+        // Columns still come out in FROM-list order.
+        assertArrayEquals(new Object[]{100L, "Anna", "Bike", 1L, "Anna", "Copenhagen",
+                "Bike", 2999.0, "Copenhagen", "Denmark", 1_400_000L}, rows.get(0));
     }
 
     @Test
     void aFilterStaysBelowTheJoinsAndStillPrunesItsTable(@TempDir Path tmp) throws Exception {
-        Planner planner = testbedPlanner(tmp);
+        Planner planner = testbedPlanner(tmp, JoinMode.SYNTAX);
 
         Plan plan = planner.plan(
                 List.of(new Selection("o_orderkey", Comparison.LESS_THAN, 102L)),
                 FOUR_TABLE_JOINS);
 
-        HashJoinOperator cities = assertInstanceOf(HashJoinOperator.class, plan.root());
-        HashJoinOperator products = assertInstanceOf(HashJoinOperator.class, cities.build());
-        HashJoinOperator customers = assertInstanceOf(HashJoinOperator.class, products.build());
-        assertInstanceOf(FilterOperator.class, customers.build(),
-                "the orders filter is below every join");
+        // Three joins still, and the orders filter sits under all of them.
+        assertEquals(3, countJoins(plan.root()));
+        assertFalse(countFilters(plan.root()) == 0, "the orders filter must stay in the plan");
 
         // orders has two partitions, [100,101] and [102,103]; the second is pruned.
         assertEquals(new ScanStats(6, 5, 1), plan.stats());
@@ -97,8 +92,45 @@ class JoinPlannerTest {
     }
 
     @Test
+    void aBiggerTableBuildingTheHashMeansTheRowIsReorderedBack(@TempDir Path tmp) throws Exception {
+        Planner planner = testbedPlanner(tmp, JoinMode.SYNTAX);
+
+        // orders (4 rows) joins customers (3 rows): the smaller input builds,
+        // so the chain's row comes out customers-first. A reordering pass puts
+        // the columns back into FROM order before the statement returns them.
+        Plan plan = planner.plan(List.of(), FOUR_TABLE_JOINS);
+
+        assertInstanceOf(ColumnReorderOperator.class, plan.root(),
+                "the reordered row is mapped back to FROM order");
+        assertTrue(plan.joinOrder().contains("reordered=true"), plan.joinOrder());
+        List<Object[]> rows = drain(plan.root());
+        // orders columns first, then customers, products, cities.
+        assertArrayEquals(new Object[]{100L, "Anna", "Bike", 1L, "Anna", "Copenhagen",
+                "Bike", 2999.0, "Copenhagen", "Denmark", 1_400_000L}, rows.get(0));
+        assertEquals(4, rows.size());
+    }
+
+    /** How many hash joins the plan contains. */
+    private static int countJoins(Operator operator) {
+        if (operator instanceof HashJoinOperator join)
+            return 1 + countJoins(join.build()) + countJoins(join.probe());
+        if (operator instanceof ColumnReorderOperator reorder) return countJoins(reorder.child());
+        if (operator instanceof FilterOperator filter) return countJoins(filter.child());
+        return 0;
+    }
+
+    /** How many filters the plan contains. */
+    private static int countFilters(Operator operator) {
+        if (operator instanceof HashJoinOperator join)
+            return countFilters(join.build()) + countFilters(join.probe());
+        if (operator instanceof ColumnReorderOperator reorder) return countFilters(reorder.child());
+        if (operator instanceof FilterOperator filter) return 1 + countFilters(filter.child());
+        return 0;
+    }
+
+    @Test
     void aTableWithNoConnectingPredicateIsRejectedWithAReorderHint(@TempDir Path tmp) throws Exception {
-        Planner planner = testbedPlanner(tmp);
+        Planner planner = testbedPlanner(tmp, JoinMode.OPTIMIZED);
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> planner.plan(List.of(),
@@ -110,22 +142,25 @@ class JoinPlannerTest {
 
     @Test
     void aSecondConnectingPredicateForTheSameTableIsRejected(@TempDir Path tmp) throws Exception {
-        Planner planner = testbedPlanner(tmp);
+        Planner planner = testbedPlanner(tmp, JoinMode.OPTIMIZED);
 
-        // products is connected to the already-joined tables twice: once by
-        // o_prodname = p_name and once by c_city = p_name.
+        // products is connected to the rest of the list twice: once by
+        // o_prodname = p_name and once by c_name = p_name, while orders,
+        // customers and cities form a path of their own. The list is
+        // connected, so the double connection is the failure that remains.
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> planner.plan(List.of(), List.of(
                         new JoinCondition("o_custname", "c_name"),
+                        new JoinCondition("c_city", "ct_city"),
                         new JoinCondition("o_prodname", "p_name"),
-                        new JoinCondition("c_city", "p_name"))));
+                        new JoinCondition("c_name", "p_name"))));
 
         assertTrue(e.getMessage().contains("more than one join predicate"), e.getMessage());
     }
 
     // --- helpers -------------------------------------------------------
 
-    private static Planner testbedPlanner(Path tmp) throws IOException {
+    private static Planner testbedPlanner(Path tmp, JoinMode mode) throws IOException {
         Path data = tmp.resolve("data");
         StorageEngine engine = new StorageEngine(data, 2);
         engine.createTable("orders", ORDERS);
@@ -159,7 +194,7 @@ class JoinPlannerTest {
         for (String table : List.of("orders", "customers", "products", "cities")) {
             inputs.add(input(data, catalog.getTable(table)));
         }
-        return new Planner(inputs);
+        return new Planner(inputs, mode);
     }
 
     private static Planner.TableInput input(Path data, Catalog.TableEntry table) {

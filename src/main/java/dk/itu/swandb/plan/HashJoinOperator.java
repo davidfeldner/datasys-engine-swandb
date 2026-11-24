@@ -8,20 +8,29 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import dk.itu.swandb.LogFormat;
+
 /**
  * Inner equi-join: builds a hash table from the build child, streams the probe
  * child. A probe row that matches {@code k} build rows emits {@code k} output
- * rows, each the build row's columns followed by the probe row's columns, so
- * a left-deep chain emits columns in {@code FROM}-list order.
+ * rows, each the build row's columns followed by the probe row's columns.
  *
  * <p>Keys are compared with Java {@code equals}: the binder has already
  * rejected a join whose two sides have different types, because a {@code
  * LONG} 3 and a {@code DOUBLE} 3.0 would never match.
  *
- * <p>{@link #close()} reports the three figures that make a join visible in
- * the log: rows drained from the build side, rows pulled from the probe side,
- * and rows emitted. {@code rowsOut} is the intermediate result size week 11
- * optimizes and week 12 measures.
+ * <p>Since Exercise 11 the operator is handed its plan-time estimate and
+ * which side each input is, so {@link #close()} writes the one line that
+ * makes the optimizer measurable: the estimated output next to the actual
+ * one.
+ *
+ * <pre>
+ * join=1 tables=products&lt;orders estRows=4 rowsBuild=2 rowsProbe=4 rowsOut=4
+ * </pre>
+ *
+ * {@code rowsOut} is the size of an intermediate result — the number week 11
+ * optimizes and week 12 measures — and {@code estRows} against it is the
+ * estimate error.
  */
 public final class HashJoinOperator implements Operator {
 
@@ -31,6 +40,7 @@ public final class HashJoinOperator implements Operator {
     private final Operator probe;
     private final int buildKey;
     private final int probeKey;
+    private final JoinEstimate estimate;
 
     /** The build side, key to every row that carries the key. */
     private final Map<Object, List<Object[]>> hashTable = new HashMap<>();
@@ -44,11 +54,22 @@ public final class HashJoinOperator implements Operator {
     private long rowsProbe;
     private long rowsOut;
 
+    /** Without an estimate: the operator's own tests build it this way. */
     HashJoinOperator(Operator build, Operator probe, int buildKey, int probeKey) {
+        this(build, probe, buildKey, probeKey, null);
+    }
+
+    /**
+     * @param estimate the plan-time estimate and the inputs' names, or
+     *                 {@code null} when the caller has none
+     */
+    HashJoinOperator(Operator build, Operator probe, int buildKey, int probeKey,
+                     JoinEstimate estimate) {
         this.build = build;
         this.probe = probe;
         this.buildKey = buildKey;
         this.probeKey = probeKey;
+        this.estimate = estimate;
     }
 
     @Override
@@ -90,7 +111,16 @@ public final class HashJoinOperator implements Operator {
     public void close() {
         probe.close();
         build.close();
-        LOGGER.debug("rowsBuild={} rowsProbe={} rowsOut={}", rowsBuild, rowsProbe, rowsOut);
+        if (estimate == null) {
+            LOGGER.debug("rowsBuild={} rowsProbe={} rowsOut={}", rowsBuild, rowsProbe, rowsOut);
+            return;
+        }
+        // The line Exercise 11 section 5 asks for: estimate and actual output
+        // on one line, so the error is recoverable per join, and attributable
+        // to the statement through the CSV log's statementNumber field.
+        LOGGER.debug("join={} tables={} estRows={} rowsBuild={} rowsProbe={} rowsOut={} crossProduct={}",
+                estimate.number(), LogFormat.sanitize(estimate.tables()), estimate.estRows(),
+                rowsBuild, rowsProbe, rowsOut, estimate.crossProduct());
     }
 
     private static Object[] concatenate(Object[] buildRow, Object[] probeRow) {
@@ -116,5 +146,10 @@ public final class HashJoinOperator implements Operator {
 
     int probeKey() {
         return probeKey;
+    }
+
+    /** The plan-time estimate and input roles, or {@code null}. */
+    JoinEstimate estimate() {
+        return estimate;
     }
 }

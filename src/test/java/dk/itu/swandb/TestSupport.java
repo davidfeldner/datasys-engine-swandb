@@ -47,6 +47,19 @@ public final class TestSupport {
      * streams, so tests never print engine output into the build log.
      */
     public static Capture runEngine(String[] args, Path dataDir) {
+        return runEngineWithSession(args, dataDir).capture();
+    }
+
+    /** A run's captured output and the session id its log lines carry. */
+    public record SessionCapture(Capture capture, String sessionId) {
+    }
+
+    /**
+     * Runs the front door and remembers the session id: every log line of
+     * the run carries it in the CSV field after the timestamp, so a test can
+     * read exactly its own lines from the shared {@code logs/engine.log}.
+     */
+    public static SessionCapture runEngineWithSession(String[] args, Path dataDir) {
         PrintStream originalOut = System.out;
         PrintStream originalErr = System.err;
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -55,8 +68,8 @@ public final class TestSupport {
             System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
             System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
             int exitCode = Engine.run(args, dataDir);
-            return new Capture(exitCode, out.toString(StandardCharsets.UTF_8),
-                    err.toString(StandardCharsets.UTF_8));
+            return new SessionCapture(new Capture(exitCode, out.toString(StandardCharsets.UTF_8),
+                    err.toString(StandardCharsets.UTF_8)), Engine.lastSessionId());
         } finally {
             System.setOut(originalOut);
             System.setErr(originalErr);

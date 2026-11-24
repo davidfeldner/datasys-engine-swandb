@@ -41,6 +41,11 @@ public final class PinnedQuery implements AutoCloseable {
         return plan.stats();
     }
 
+    /** The join order the planner chose: tables, mode and per-join estimates. */
+    public String joinOrder() {
+        return plan.joinOrder();
+    }
+
     /**
      * The newest version this query pinned. For a single-table query that is
      * the version it reads; for a join it is the largest of the pinned

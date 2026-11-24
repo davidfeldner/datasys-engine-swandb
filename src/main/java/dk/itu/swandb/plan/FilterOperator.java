@@ -64,6 +64,11 @@ public final class FilterOperator implements Operator {
                 column.name(), comparison, rowsIn, rowsOut);
     }
 
+    /** The operator below the filter: the planner's tests walk it. */
+    Operator child() {
+        return child;
+    }
+
     /**
      * The row test, shared with {@code DELETE} through {@link Pruning} so a
      * delete keeps exactly the rows this filter would emit.
