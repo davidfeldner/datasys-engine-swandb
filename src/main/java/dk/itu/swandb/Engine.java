@@ -19,8 +19,12 @@ import dk.itu.swandb.sql.Executor;
  *   <li>no arguments — print the team name and usage;</li>
  *   <li>{@code -c "<sql>"} — run that single SQL statement (a bare
  *       {@code "<sql>"} argument is accepted as shorthand);</li>
- *   <li>{@code -f <script.sql>} — run a whole script.</li>
+ *   <li>{@code -f <script.sql>} — run a whole script;</li>
  * </ul>
+ *
+ * and one flag may precede any of them since Exercise 11:
+ * {@code -j optimized|syntax} picks the join order ({@link JoinMode}),
+ * defaulting to {@code optimized}.
  *
  * <p>Every {@code SELECT}'s rows go to stdout as headerless CSV and nothing
  * else does; the console log and errors go to stderr, so
@@ -46,6 +50,21 @@ public final class Engine {
      */
     static final String MAX_ROWS_PER_PARTITION_PROPERTY = "engine.maxRowsPerPartition";
 
+    /** The join-order flag of Exercise 11; see {@link #joinMode}. */
+    static final String JOIN_FLAG = "-j";
+
+    /**
+     * The session id of the most recent run in this JVM. Every log line of a
+     * run carries it, so a test can read exactly its own lines out of the
+     * shared {@code logs/engine.log}; production never reads this.
+     */
+    private static volatile String lastSessionId = "";
+
+    /** The session id the most recent {@link #run} used, for tests. */
+    static String lastSessionId() {
+        return lastSessionId;
+    }
+
     private Engine() {
     }
 
@@ -61,7 +80,9 @@ public final class Engine {
      * this directly so a failing script cannot kill their JVM.
      */
     public static int run(String[] args, Path dataDir) {
-        MDC.put("sessionId", UUID.randomUUID().toString());
+        String sessionId = UUID.randomUUID().toString();
+        lastSessionId = sessionId;
+        MDC.put("sessionId", sessionId);
         MDC.put("statementNumber", "0");
         long start = System.nanoTime();
         try {
@@ -72,7 +93,15 @@ public final class Engine {
                 return 0;
             }
 
-            String sql = scriptText(args);
+            JoinMode joinMode;
+            try {
+                joinMode = joinMode(args);
+            } catch (IllegalArgumentException e) {
+                System.err.println("error: " + e.getMessage());
+                printUsage(System.err);
+                return 2;
+            }
+            String sql = scriptText(withoutJoinFlag(args));
             if (sql == null) {
                 printUsage(System.err);
                 return 2;
@@ -81,6 +110,7 @@ public final class Engine {
             // try-with-resources: the catalog is written when the engine
             // closes, whether the script succeeded or failed part way.
             try (StorageEngine engine = new StorageEngine(dataDir, maxRowsPerPartition())) {
+                engine.setJoinMode(joinMode);
                 new Executor(engine).executeScript(sql,
                         rows -> CsvWriter.writeRows(System.out, rows));
             }
@@ -89,12 +119,12 @@ public final class Engine {
             String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             System.err.println("error: " + message);
             LOGGER.error("engine failed reason={} durationMs={}",
-                    LogFormat.sanitize(message), elapsedMs(start));
+                    LogFormat.sanitize(message), LogFormat.elapsedMs(start));
             return 1;
         } finally {
             // Back to 0 so the stop line is outside any statement's count.
             MDC.put("statementNumber", "0");
-            LOGGER.debug("engine stopped durationMs={}", elapsedMs(start));
+            LOGGER.debug("engine stopped durationMs={}", LogFormat.elapsedMs(start));
             MDC.remove("statementNumber");
             MDC.remove("sessionId");
         }
@@ -133,6 +163,37 @@ public final class Engine {
         return trimmed.endsWith(";") ? statement : statement + ";";
     }
 
+    /**
+     * The {@code -j} mode, defaulting to {@link JoinMode#OPTIMIZED}. The flag
+     * sits before the statement arguments, so it reads the same whether the
+     * statement is a script or a {@code -c} one-liner.
+     *
+     * @throws IllegalArgumentException if the flag names an unknown mode
+     */
+    private static JoinMode joinMode(String[] args) {
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals(JOIN_FLAG)) {
+                if (i + 1 >= args.length) throw new IllegalArgumentException("missing value for " + JOIN_FLAG);
+                return JoinMode.parse(args[i + 1]);
+            }
+        }
+        return JoinMode.OPTIMIZED;
+    }
+
+    /** The arguments without the {@code -j <mode>} pair. */
+    private static String[] withoutJoinFlag(String[] args) {
+        for (int i = 0; i < args.length; i++) {
+            if (!args[i].equals(JOIN_FLAG)) continue;
+            String[] rest = new String[args.length - 2];
+            for (int j = 0, k = 0; j < args.length; j++) {
+                if (j == i || j == i + 1) continue;
+                rest[k++] = args[j];
+            }
+            return rest;
+        }
+        return args;
+    }
+
     private static void printUsage(PrintStream out) {
         out.println(TEAM_NAME + " — How to Build Data Systems, Fall 2026");
         out.println("usage:");
@@ -141,6 +202,8 @@ public final class Engine {
         out.println("  ./engine -f <file>                   run a .sql script");
         out.println();
         out.println("A bare \"<sql>\" argument is accepted as shorthand for -c.");
+        out.println("  -j optimized|syntax                  join order: greedy by estimated");
+        out.println("                                       size (default), or the FROM list");
         out.println("ENGINE_JAVA_OPTS=\"-Dengine.maxRowsPerPartition=<n>\" sets the");
         out.println("partition row cap of tables created by that run.");
         out.println("SELECT rows are written to stdout as headerless CSV; logs go to stderr.");
@@ -162,9 +225,5 @@ public final class Engine {
             throw new IllegalArgumentException(
                     MAX_ROWS_PER_PARTITION_PROPERTY + " must be > 0: " + raw);
         return value;
-    }
-
-    private static long elapsedMs(long startNanos) {
-        return (System.nanoTime() - startNanos) / 1_000_000L;
     }
 }

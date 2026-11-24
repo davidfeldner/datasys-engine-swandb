@@ -7,24 +7,27 @@ import dk.itu.swandb.plan.Operator;
 import dk.itu.swandb.plan.Plan;
 
 /**
- * A planned query over one pinned table version, the handle
- * {@link StorageEngine#openQuery} returns.
+ * A planned query over one pinned table version, or over one pinned version
+ * per table of a multi-table join, the handle {@link StorageEngine#openQuery}
+ * returns.
  *
- * <p>The plan is built from the pinned partition list, so it carries its
+ * <p>The plan is built from the pinned partition lists, so it carries its
  * snapshot's partitions with their offsets and counts instead of indices into
  * whatever the catalog holds later. Draining it after a concurrent commit
- * therefore returns the pinned version's rows (Exercise 8).
+ * therefore returns the pinned versions' rows (Exercise 8).
  *
- * <p>Close the query to release the pin. Until then the version's bytes stay
+ * <p>Close the query to release the pins. Until then the versions' bytes stay
  * in the data file, because a pin keeps every live version readable.
  */
 public final class PinnedQuery implements AutoCloseable {
 
-    private final VersionedTable.PinnedVersion pinned;
+    private final List<VersionedTable.PinnedVersion> pinned;
     private final Plan plan;
 
-    PinnedQuery(VersionedTable.PinnedVersion pinned, Plan plan) {
-        this.pinned = pinned;
+    PinnedQuery(List<VersionedTable.PinnedVersion> pinned, Plan plan) {
+        if (pinned == null || pinned.isEmpty())
+            throw new IllegalArgumentException("a query must pin at least one version");
+        this.pinned = List.copyOf(pinned);
         this.plan = plan;
     }
 
@@ -38,9 +41,20 @@ public final class PinnedQuery implements AutoCloseable {
         return plan.stats();
     }
 
-    /** The version this query pinned, and therefore the one it reads. */
+    /** The join order the planner chose: tables, mode and per-join estimates. */
+    public String joinOrder() {
+        return plan.joinOrder();
+    }
+
+    /**
+     * The newest version this query pinned. For a single-table query that is
+     * the version it reads; for a join it is the largest of the pinned
+     * versions, which is the one the summary line reports.
+     */
     public int version() {
-        return pinned.number();
+        int newest = 0;
+        for (VersionedTable.PinnedVersion version : pinned) newest = Math.max(newest, version.number());
+        return newest;
     }
 
     /** Drains the plan in one go, always closing the operator tree. */
@@ -59,6 +73,6 @@ public final class PinnedQuery implements AutoCloseable {
 
     @Override
     public void close() {
-        pinned.close();
+        for (VersionedTable.PinnedVersion version : pinned) version.close();
     }
 }

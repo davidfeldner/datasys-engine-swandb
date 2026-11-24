@@ -7,6 +7,7 @@ import dk.itu.swandb.ColumnSpec;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
 import dk.itu.swandb.sql.ast.DeleteStatement;
+import dk.itu.swandb.sql.ast.JoinPredicate;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -50,9 +51,30 @@ public final class SqlPrinter {
     }
 
     private static String printSelect(SelectStatement s) {
-        String sql = "SELECT * FROM " + s.tableName();
-        if (s.where().isPresent()) sql += " WHERE " + printPredicate(s.where().get());
+        String sql = "SELECT * FROM " + String.join(", ", s.tableNames());
+        if (!s.filters().isEmpty() || !s.joins().isEmpty())
+            sql += " WHERE " + printCondition(s);
         return sql + ";";
+    }
+
+    /**
+     * Filters then joins, a fixed order, because the AST sorts each parsed
+     * predicate into its own list: reparsing this text restores both lists,
+     * and therefore the same statement.
+     */
+    private static String printCondition(SelectStatement s) {
+        StringJoiner predicates = new StringJoiner(" AND ");
+        for (Predicate filter : s.filters()) {
+            predicates.add(printPredicate(filter));
+        }
+        for (JoinPredicate join : s.joins()) {
+            predicates.add(printJoin(join));
+        }
+        return predicates.toString();
+    }
+
+    private static String printJoin(JoinPredicate j) {
+        return j.leftColumn() + " = " + j.rightColumn();
     }
 
     private static String printDelete(DeleteStatement s) {

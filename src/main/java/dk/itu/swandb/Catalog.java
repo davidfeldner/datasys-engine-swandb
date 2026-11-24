@@ -10,17 +10,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * On-disk JSON catalog. Stores per-table schema, the data file name, the
- * row capacity of each partition, and the per-partition min/max summaries
- * for every column. The catalog is the single source of truth for pruning
- * — no per-data-file footer or header is consulted.
+ * row capacity of each partition, and the per-partition summaries for every
+ * column: the min/max pruning range and, since Exercise 11, the NDV the join
+ * optimizer estimates with. The catalog is the single source of truth for
+ * pruning and for the estimates — no per-data-file footer or header is
+ * consulted.
  *
  * <p>Since Exercise 7 a table also carries its committed version, and each
  * partition records the version it was written in. The on-disk catalog is
@@ -46,29 +46,49 @@ public final class Catalog {
                     // by always deserialising bare integers as Long, not Integer.
                     .enable(com.fasterxml.jackson.databind.DeserializationFeature.USE_LONG_FOR_INTS);
 
-    /** One column's min/max summary for one partition. */
+    /**
+     * One column's summary for one partition: the min/max pruning range and,
+     * since Exercise 11, the number of distinct values.
+     */
     public static final class ColumnSummary {
         public String name;
         public ColumnType type;
         public Object min;
         public Object max;
+        /**
+         * Number of distinct values this partition holds for the column.
+         * {@code null} means "not recorded": a catalog written before
+         * Exercise 11, which the roll-forward path fills in; see
+         * {@code docs/optimizer-design.md}.
+         */
+        public Long ndv = null;
 
         public ColumnSummary() {
         }
 
         public ColumnSummary(String name, ColumnType type, Object min, Object max) {
+            this(name, type, min, max, null);
+        }
+
+        public ColumnSummary(String name, ColumnType type, Object min, Object max, Long ndv) {
             this.name = name;
             this.type = type;
             this.min = min;
             this.max = max;
+            this.ndv = ndv;
         }
 
         public String name() { return name; }
-        public ColumnType type() { return type; }
         public Object min() { return min; }
         public Object max() { return max; }
 
-        public ColumnSummary copy() { return new ColumnSummary(name, type, min, max); }
+        /** The partition's NDV, or {@code null} when the catalog records none. */
+        public Long ndv() { return ndv; }
+
+        /** Whether this summary carries an NDV, which a legacy catalog does not. */
+        public boolean hasNdv() { return ndv != null; }
+
+        public ColumnSummary copy() { return new ColumnSummary(name, type, min, max, ndv); }
     }
 
     /** One partition in a data file. */
@@ -102,9 +122,7 @@ public final class Catalog {
         }
 
         public int index() { return index; }
-        public int version() { return version; }
         public int rowCount() { return rowCount; }
-        public List<ColumnSummary> columns() { return columns; }
         public long offset() { return offset; }
 
         /**
@@ -113,6 +131,15 @@ public final class Catalog {
          * re-measured by the commit that needs the boundary.
          */
         public long endOffset() { return endOffset; }
+
+        /** The summary for one column, or {@code null} when this entry lacks it. */
+        public ColumnSummary summary(String columnName) {
+            for (ColumnSummary summary : columns) {
+                if (summary.name().equals(columnName))
+                    return summary;
+            }
+            return null;
+        }
 
         /**
          * A detached copy. Versions share entries — a carried partition is
@@ -177,9 +204,6 @@ public final class Catalog {
             throw new IllegalStateException("failed to read catalog at " + file, e);
         }
     }
-
-    /** Where {@code catalog.json} lives. */
-    public Path file() { return file; }
 
     /**
      * Persist the in-memory document to disk, atomically: write

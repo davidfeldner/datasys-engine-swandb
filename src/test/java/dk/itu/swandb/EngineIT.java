@@ -1,13 +1,10 @@
 package dk.itu.swandb;
 
+import static dk.itu.swandb.TestSupport.copyResource;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -20,6 +17,8 @@ import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+
+import dk.itu.swandb.TestSupport.Capture;
 
 /**
  * End-to-end tests of the SQL front door: a script runs through
@@ -249,31 +248,6 @@ class EngineIT {
     }
 
     private static Capture run(String[] args, Path tmp) {
-        PrintStream originalOut = System.out;
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ByteArrayOutputStream err = new ByteArrayOutputStream();
-        try {
-            System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
-            System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
-            int exitCode = Engine.run(args, tmp.resolve("data"));
-            return new Capture(exitCode, out.toString(StandardCharsets.UTF_8),
-                    err.toString(StandardCharsets.UTF_8));
-        } finally {
-            System.setOut(originalOut);
-            System.setErr(originalErr);
-        }
-    }
-
-    private static Path copyResource(Path tmp, String resourceName) throws Exception {
-        Path target = tmp.resolve(resourceName);
-        try (InputStream in = EngineIT.class.getClassLoader().getResourceAsStream(resourceName)) {
-            assertTrue(in != null, "missing test resource " + resourceName);
-            Files.write(target, in.readAllBytes());
-        }
-        return target;
-    }
-
-    private record Capture(int exitCode, String stdout, String stderr) {
+        return TestSupport.runEngine(args, tmp.resolve("data"));
     }
 }

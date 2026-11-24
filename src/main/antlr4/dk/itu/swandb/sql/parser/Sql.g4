@@ -26,18 +26,23 @@ columnType  : STRING | LONG | DOUBLE ;
 
 copy        : COPY IDENTIFIER FROM STRING_LITERAL ;
 
-// WHERE is optional, as in DuckDB.
-select      : SELECT '*' FROM IDENTIFIER (WHERE predicate)? ;
+// WHERE is optional, as in DuckDB, and a FROM list joins tables in the order
+// they are written. A condition is an AND conjunction: no OR, no parentheses.
+select      : SELECT '*' FROM IDENTIFIER (',' IDENTIFIER)* (WHERE condition)? ;
 // Deleting every row is legal; stdout stays reserved for SELECT.
-delete      : DELETE FROM IDENTIFIER (WHERE predicate)? ;
-predicate   : IDENTIFIER comparison=('=' | '<' | '>') literal ;
+delete      : DELETE FROM IDENTIFIER (WHERE filter)? ;
+condition   : predicate (AND predicate)* ;
+predicate   : filter | join ;
+filter      : IDENTIFIER comparison=('=' | '<' | '>') literal ;
+// Column compared with column: the equi-join predicate.
+join        : left=IDENTIFIER '=' right=IDENTIFIER ;
 literal     : STRING_LITERAL | LONG_LITERAL | DOUBLE_LITERAL ;
 
 // --- Lexer ------------------------------------------------------------
 
 // Keyword rules MUST precede IDENTIFIER, or IDENTIFIER swallows them.
 CREATE : 'CREATE' ;   TABLE : 'TABLE' ;   COPY : 'COPY' ;   FROM : 'FROM' ;
-SELECT : 'SELECT' ;   WHERE : 'WHERE' ;   DELETE : 'DELETE' ;
+SELECT : 'SELECT' ;   WHERE : 'WHERE' ;   DELETE : 'DELETE' ;   AND : 'AND' ;
 // The type names are tokens of their own, distinct from the literals below.
 STRING : 'STRING' ;   LONG : 'LONG' ;   DOUBLE : 'DOUBLE' ;
 

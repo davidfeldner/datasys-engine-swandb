@@ -1,10 +1,11 @@
 package dk.itu.swandb.plan;
 
+import static dk.itu.swandb.plan.OperatorAssertions.assertRows;
+import static dk.itu.swandb.plan.OperatorAssertions.drain;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -56,26 +57,6 @@ class FilterOperatorTest {
         assertEquals(List.of(), drain(filter));
     }
 
-    private static List<Object[]> drain(Operator operator) {
-        List<Object[]> out = new ArrayList<>();
-        operator.open();
-        try {
-            Object[] row;
-            while ((row = operator.next()) != null) {
-                out.add(row);
-            }
-        } finally {
-            operator.close();
-        }
-        return out;
-    }
-
-    private static void assertRows(List<Object[]> expected, List<Object[]> actual) {
-        assertEquals(expected.size(), actual.size());
-        for (int i = 0; i < expected.size(); i++) {
-            assertArrayEquals(expected.get(i), actual.get(i), "row " + i);
-        }
-    }
 
     // Guards that the helper itself iterates in order and then stops.
     @Test

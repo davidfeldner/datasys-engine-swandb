@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
-import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
@@ -49,6 +48,24 @@ class SqlPrinterTest {
         assertRoundTrips(one("DELETE FROM trips WHERE city = 'Odense';"));
         assertRoundTrips(one("DELETE FROM trips WHERE price < -1.5;"));
         assertRoundTrips(one("DELETE FROM trips WHERE city = '';"));
+    }
+
+    @Test
+    void tableListsAndAndChainsRoundTrip() {
+        assertRoundTrips(one("SELECT * FROM orders, customers WHERE o_custname = c_name;"));
+        assertRoundTrips(one("SELECT * FROM orders, customers, products, cities "
+                + "WHERE o_custname = c_name AND o_prodname = p_name AND c_city = ct_city;"));
+        assertRoundTrips(one("SELECT * FROM orders, customers "
+                + "WHERE o_quantity > 0 AND o_custname = c_name;"));
+        assertRoundTrips(one("SELECT * FROM orders, customers;"));
+    }
+
+    @Test
+    void joinsArePrintedAfterFiltersInAFixedOrder() {
+        assertEquals("SELECT * FROM orders, customers, products"
+                        + " WHERE o_quantity > 0 AND o_custname = c_name AND o_prodname = p_name;",
+                printer.print(one("select * from orders, customers, products "
+                        + "where o_custname = c_name and o_quantity > 0 and o_prodname = p_name;")));
     }
 
     @Test
@@ -132,8 +149,8 @@ class SqlPrinterTest {
         // Escaped quotes are out of scope and a literal ends at the next quote
         // on the same line, so these values have no spelling in the subset.
         for (String value : List.of("it's", "two\nlines", "carriage\rreturn")) {
-            SelectStatement select = new SelectStatement("trips",
-                    Optional.of(new Predicate("city", Comparison.EQUALS, value)));
+            SelectStatement select = new SelectStatement(List.of("trips"),
+                    List.of(new Predicate("city", Comparison.EQUALS, value)), List.of());
 
             IllegalArgumentException e =
                     assertThrows(IllegalArgumentException.class, () -> printer.print(select), value);
@@ -145,8 +162,8 @@ class SqlPrinterTest {
     @Test
     void doublesThatAreNotFiniteAreRefused() {
         for (double value : new double[]{Double.NaN, Double.POSITIVE_INFINITY}) {
-            SelectStatement select = new SelectStatement("trips",
-                    Optional.of(new Predicate("price", Comparison.LESS_THAN, value)));
+            SelectStatement select = new SelectStatement(List.of("trips"),
+                    List.of(new Predicate("price", Comparison.LESS_THAN, value)), List.of());
 
             assertThrows(IllegalArgumentException.class, () -> printer.print(select));
         }

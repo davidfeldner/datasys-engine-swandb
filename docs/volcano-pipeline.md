@@ -12,9 +12,12 @@ records where each of them now lives.
 | `Operator` (`open`/`next`/`close`) | `dk.itu.swandb.plan.Operator` |
 | `ScanOperator` — reads exactly the partitions it is handed | `dk.itu.swandb.plan.ScanOperator` |
 | `FilterOperator` — row test, logs `rowsIn`/`rowsOut` in `close()` | `dk.itu.swandb.plan.FilterOperator` |
+| `HashJoinOperator` — inner equi-join, logs `rowsBuild`/`rowsProbe`/`rowsOut` | `dk.itu.swandb.plan.HashJoinOperator` |
+| `ColumnResolver` — unqualified name to table and concatenated-row index | `dk.itu.swandb.plan.ColumnResolver` |
 | `Planner` — catalog lookup, pruning, plan building | `dk.itu.swandb.plan.Planner` |
 | `Plan` (root operator + `ScanStats`) | `dk.itu.swandb.plan.Plan` |
 | Storage-level predicate | `dk.itu.swandb.plan.Selection` |
+| Storage-level join predicate | `dk.itu.swandb.plan.JoinCondition` |
 | Executor — parse → bind → plan → execute per statement | `dk.itu.swandb.sql.Executor` |
 | CSV renderer | `dk.itu.swandb.CsvWriter` |
 | Front door | `dk.itu.swandb.Engine` |
@@ -53,6 +56,32 @@ direction to compute its rewrite set (`docs/transactions-design.md`).
 The decision log lines moved with the decision: they are now emitted by
 `Planner` (`className = Planner`) and are written before any data file is
 opened. `FilterOperator.close()` reports `rowsIn`/`rowsOut`.
+
+## Multi-table joins (Exercise 10)
+
+`HashJoinOperator(build, probe, buildKey, probeKey)` is an inner equi-join.
+`open()` drains the build child into a `HashMap<Object, List<Object[]>>`,
+keyed by the build key; `next()` pulls probe rows, looks up the key, and
+emits each match as build columns followed by probe columns. A probe row
+with no partner is dropped. `close()` logs `rowsBuild`, `rowsProbe` and
+`rowsOut`, where `rowsOut` is the intermediate result size week 11
+optimizes.
+
+`Planner` still builds one pipeline per table — pruning and its filters
+stay below every join — then folds the `FROM` list left to right. For each
+new table it finds the one join predicate connecting that table to the
+tables already joined and adds `HashJoinOperator(joinedSoFar, newTable,
+buildKey, probeKey)`, so the plan is left-deep in `FROM`-list order and
+`SELECT *` emits columns in that order. The planner rejects a table with no
+connecting predicate and tells the user to reorder the `FROM` list. It also
+rejects a table connected by a second predicate instead of silently
+ignoring it; applying such a predicate as an extra filter on the join
+output is out of scope this week.
+
+`StorageEngine.openQuery(List<String>, filters, joins)` pins one snapshot
+per table before planning, so a whole statement reads one version per
+table. `ScanStats` adds the per-table pruning figures, and
+`HashJoinOperator` reports each intermediate result in its own log line.
 
 ## How this stays true to `storage-design.md`
 

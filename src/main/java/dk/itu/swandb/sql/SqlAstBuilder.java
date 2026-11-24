@@ -11,6 +11,7 @@ import dk.itu.swandb.enums.Comparison;
 import dk.itu.swandb.sql.ast.CopyStatement;
 import dk.itu.swandb.sql.ast.CreateTableStatement;
 import dk.itu.swandb.sql.ast.DeleteStatement;
+import dk.itu.swandb.sql.ast.JoinPredicate;
 import dk.itu.swandb.sql.ast.Predicate;
 import dk.itu.swandb.sql.ast.SelectStatement;
 import dk.itu.swandb.sql.ast.Statement;
@@ -72,22 +73,49 @@ final class SqlAstBuilder extends SqlBaseVisitor<Object> {
 
     @Override
     public Object visitSelect(SqlParser.SelectContext ctx) {
-        Optional<Predicate> where = Optional.empty();
-        if (ctx.predicate() != null) where = Optional.of((Predicate) visit(ctx.predicate()));
-        return new SelectStatement(ctx.IDENTIFIER().getText(), where);
+        List<String> tableNames = new ArrayList<>(ctx.IDENTIFIER().size());
+        for (var identifier : ctx.IDENTIFIER()) {
+            tableNames.add(identifier.getText());
+        }
+
+        // A condition is a conjunction, so each parsed predicate lands in one
+        // of two lists and both keep the written order.
+        List<Predicate> filters = new ArrayList<>();
+        List<JoinPredicate> joins = new ArrayList<>();
+        if (ctx.condition() != null) {
+            for (SqlParser.PredicateContext predicate : ctx.condition().predicate()) {
+                switch (visit(predicate)) {
+                    case Predicate filter -> filters.add(filter);
+                    case JoinPredicate join -> joins.add(join);
+                    default -> throw new IllegalStateException(
+                            "predicate rule matched an unexpected shape: " + predicate.getText());
+                }
+            }
+        }
+        return new SelectStatement(tableNames, filters, joins);
     }
 
     @Override
     public Object visitDelete(SqlParser.DeleteContext ctx) {
         Optional<Predicate> where = Optional.empty();
-        if (ctx.predicate() != null) where = Optional.of((Predicate) visit(ctx.predicate()));
+        if (ctx.filter() != null) where = Optional.of((Predicate) visit(ctx.filter()));
         return new DeleteStatement(ctx.IDENTIFIER().getText(), where);
     }
 
     @Override
     public Object visitPredicate(SqlParser.PredicateContext ctx) {
+        return visit(ctx.getChild(0));
+    }
+
+    @Override
+    public Object visitFilter(SqlParser.FilterContext ctx) {
         return new Predicate(ctx.IDENTIFIER().getText(),
                 comparison(ctx.comparison.getText()), visit(ctx.literal()));
+    }
+
+    @Override
+    public Object visitJoin(SqlParser.JoinContext ctx) {
+        return new JoinPredicate(ctx.left.getText(), ctx.right.getText());
     }
 
     @Override

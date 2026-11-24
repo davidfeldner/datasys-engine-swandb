@@ -10,7 +10,7 @@ import java.util.List;
  * CREATE  version
  * COPY    version, rows, partitions        rows loaded, partitions appended
  * DELETE  version, rows, partitions, partitionsRewritten, partitionsCarried
- * SELECT  version, rows, partitionsRead, partitionsPruned
+ * SELECT  version, rows, partitionsRead, partitionsPruned, joinOrder
  * </pre>
  *
  * {@code version} is the version the statement committed, or for a
@@ -19,10 +19,19 @@ import java.util.List;
 public record Result(int version, int rows, int partitions,
                      int partitionsRewritten, int partitionsCarried,
                      int partitionsRead, int partitionsPruned,
-                     List<Object[]> rowsOut) {
+                     List<Object[]> rowsOut, String joinOrder) {
 
     public Result {
         rowsOut = List.copyOf(rowsOut);
+        if (joinOrder == null) joinOrder = "";
+    }
+
+    /** The statement's figures, for a statement that joins nothing. */
+    public Result(int version, int rows, int partitions, int partitionsRewritten,
+                  int partitionsCarried, int partitionsRead, int partitionsPruned,
+                  List<Object[]> rowsOut) {
+        this(version, rows, partitions, partitionsRewritten, partitionsCarried,
+                partitionsRead, partitionsPruned, rowsOut, "");
     }
 
     /** {@code CREATE TABLE}: version 0, nothing done to any data. */
@@ -40,8 +49,10 @@ public record Result(int version, int rows, int partitions,
         return new Result(version, rowsDeleted, rewritten, rewritten, carried, 0, 0, List.of());
     }
 
-    /** {@code SELECT}: the rows read out of a pinned version. */
-    public static Result selected(int version, List<Object[]> rowsOut, int partitionsRead, int partitionsPruned) {
-        return new Result(version, rowsOut.size(), 0, 0, 0, partitionsRead, partitionsPruned, rowsOut);
+    /** {@code SELECT}: the rows read out of a pinned version, and the join order planned. */
+    public static Result selected(int version, List<Object[]> rowsOut, int partitionsRead,
+                                 int partitionsPruned, String joinOrder) {
+        return new Result(version, rowsOut.size(), 0, 0, 0, partitionsRead, partitionsPruned,
+                rowsOut, joinOrder);
     }
 }

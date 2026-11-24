@@ -1,22 +1,19 @@
 package dk.itu.swandb.plan;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static dk.itu.swandb.TestSupport.TRIPS_SCHEMA;
+import static dk.itu.swandb.TestSupport.copyResource;
+import static dk.itu.swandb.plan.OperatorAssertions.assertRows;
+import static dk.itu.swandb.plan.OperatorAssertions.drain;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import dk.itu.swandb.Catalog;
-import dk.itu.swandb.ColumnSpec;
 import dk.itu.swandb.StorageEngine;
-import dk.itu.swandb.enums.ColumnType;
 
 /**
  * The scan is a plain reader: it returns exactly the rows of the partitions
@@ -24,11 +21,6 @@ import dk.itu.swandb.enums.ColumnType;
  * empty list, which must read nothing and return nothing.
  */
 class ScanOperatorTest {
-
-    private static final List<ColumnSpec> TRIPS_SCHEMA = List.of(
-            new ColumnSpec("city", ColumnType.STRING),
-            new ColumnSpec("distance", ColumnType.LONG),
-            new ColumnSpec("price", ColumnType.DOUBLE));
 
     @Test
     void returnsExactlyTheRowsOfTheHandedPartitions(@TempDir Path tmp) throws Exception {
@@ -87,33 +79,4 @@ class ScanOperatorTest {
         return new Catalog(tmp.resolve("data")).getTable("trips");
     }
 
-    private static Path copyResource(Path tmp, String resourceName) throws Exception {
-        Path target = tmp.resolve(resourceName);
-        try (InputStream in = ScanOperatorTest.class.getClassLoader().getResourceAsStream(resourceName)) {
-            assertTrue(in != null, "missing test resource " + resourceName);
-            Files.write(target, in.readAllBytes());
-        }
-        return target;
-    }
-
-    private static List<Object[]> drain(Operator operator) {
-        List<Object[]> out = new ArrayList<>();
-        operator.open();
-        try {
-            Object[] row;
-            while ((row = operator.next()) != null) {
-                out.add(row);
-            }
-        } finally {
-            operator.close();
-        }
-        return out;
-    }
-
-    private static void assertRows(List<Object[]> expected, List<Object[]> actual) {
-        assertEquals(expected.size(), actual.size());
-        for (int i = 0; i < expected.size(); i++) {
-            assertArrayEquals(expected.get(i), actual.get(i), "row " + i);
-        }
-    }
 }

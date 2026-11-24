@@ -4,10 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+
+import dk.itu.swandb.TestSupport.Capture;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,22 +47,6 @@ class EngineTest {
     }
 
     private static Capture run(String[] args, Path dataDir) {
-        PrintStream originalOut = System.out;
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ByteArrayOutputStream err = new ByteArrayOutputStream();
-        try {
-            System.setOut(new PrintStream(out, true, StandardCharsets.UTF_8));
-            System.setErr(new PrintStream(err, true, StandardCharsets.UTF_8));
-            int exitCode = Engine.run(args, dataDir);
-            return new Capture(exitCode, out.toString(StandardCharsets.UTF_8),
-                    err.toString(StandardCharsets.UTF_8));
-        } finally {
-            System.setOut(originalOut);
-            System.setErr(originalErr);
-        }
-    }
-
-    private record Capture(int exitCode, String stdout, String stderr) {
+        return TestSupport.runEngine(args, dataDir);
     }
 }
